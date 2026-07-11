@@ -1,0 +1,23 @@
+{
+  "name": "gallery-on-the-go",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A secure remote gallery — access your Android phone's photos from anywhere.",
+  "workspaces": [
+    "packages/*",
+    "server",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace=server",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "build:server": "npm run build --workspace=server",
+    "build:web": "npm run build --workspace=apps/web",
+    "build:shared": "npm run build --workspace=packages/shared",
+    "lint": "npm run lint --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

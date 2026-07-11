@@ -1,0 +1,51 @@
+name: gallery_on_the_go
+description: GalleryOnTheGo — reads phone media/downloads and streams them to the GalleryOnTheGo backend on demand.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Realtime transport — matches the server's Socket.IO v4 protocol (server/src/modules/relay/relay.gateway.ts)
+  socket_io_client: ^2.0.3
+
+  # MediaStore-backed gallery access (albums, photos, videos) with Android 13+ granular permissions
+  photo_manager: ^3.2.4
+
+  # Runtime permission requests (media + "all files access" for Downloads)
+  permission_handler: ^11.3.1
+
+  # Downloads folder path resolution
+  path_provider: ^2.1.4
+
+  # Device name/model/Android version for registration
+  device_info_plus: ^10.1.2
+
+  # Persist device token + server URL across restarts
+  shared_preferences: ^2.3.2
+
+  # Device registration REST call
+  http: ^1.2.2
+
+  # Thumbnail resize/compression to match FILE_CONSTANTS.THUMBNAIL_* on the server
+  flutter_image_compress: ^2.3.0
+
+  # Detect network changes to force a reconnect
+  connectivity_plus: ^6.0.5
+
+  # Unique id generation for device-name suffix
+  uuid: ^4.5.1
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

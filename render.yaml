@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: gallery-on-the-go-backend
+    env: node
+    buildCommand: npm install && npm run build:shared && npm run build:server
+    startCommand: cd server && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      # You will need to add your Supabase and JWT secrets in the Render dashboard:
+      # - key: SUPABASE_URL
+      # - key: SUPABASE_SERVICE_ROLE_KEY
+      # - key: JWT_SECRET
