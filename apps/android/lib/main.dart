@@ -1,7 +1,25 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
-import 'screens/status_screen.dart';
 
-void main() {
+import 'screens/status_screen.dart';
+import 'services/background_service.dart';
+import 'services/fcm_handler.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Firebase must be initialised before any Firebase call.
+  await Firebase.initializeApp();
+
+  // Register the top-level FCM background handler (before runApp).
+  // This is called by Firebase when a data message arrives and the process
+  // is not running — it must be a top-level function.
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+  // Configure and start the background service (socket lives in there).
+  await initializeBackgroundService();
+
   runApp(const GalleryOnTheGoApp());
 }
 

@@ -18,7 +18,9 @@ import {
   deleteDevice,
   updateFcmToken,
   validateDeviceToken,
+  getDeviceSocketId,
 } from './device.service.js';
+import { wakeDevice } from '../relay/fcm.service.js';
 
 const router = Router();
 
@@ -199,6 +201,48 @@ router.put('/:id/fcm-token', async (req: Request, res: Response): Promise<void> 
       success: false,
       error: (err as Error).message,
     });
+  }
+});
+
+/**
+ * POST /api/devices/:id/wake
+ * Send an FCM wake-up signal to an offline device.
+ * The device receives it and reconnects to the socket server automatically.
+ * Requires admin authentication.
+ */
+router.post('/:id/wake', authenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const deviceId = String(req.params.id);
+
+    // If the device is already connected via socket, nothing to do.
+    const socketId = getDeviceSocketId(deviceId);
+    if (socketId) {
+      res.json({ success: true, status: 'already_online' });
+      return;
+    }
+
+    const device = await getDeviceById(deviceId);
+    if (!device) {
+      res.status(404).json({ success: false, error: 'Device not found' });
+      return;
+    }
+
+    if (!device.fcmToken) {
+      res.status(422).json({
+        success: false,
+        error: 'Device has no FCM token. Open the app on the device first.',
+        status: 'no_fcm_token',
+      });
+      return;
+    }
+
+    const sent = await wakeDevice(device.fcmToken, deviceId);
+    res.json({
+      success: sent,
+      status: sent ? 'wake_sent' : 'fcm_failed',
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
   }
 });
 

@@ -33,8 +33,11 @@ const envSchema = z.object({
   SUPABASE_ANON_KEY: z.string().min(1, 'SUPABASE_ANON_KEY is required'),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, 'SUPABASE_SERVICE_ROLE_KEY is required'),
 
-  // Firebase Cloud Messaging (optional in dev)
-  FCM_SERVER_KEY: z.string().optional(),
+  // Firebase Cloud Messaging — V1 API via Service Account
+  // Base64-encode the service account JSON:
+  //   base64 -w 0 firebase-service-account.json
+  // Firebase Console → Project Settings → Service Accounts → Generate new private key
+  FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
 
   // CORS
   CORS_ORIGIN: z.string().default('http://localhost:3000'),

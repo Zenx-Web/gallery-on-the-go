@@ -1,13 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../services/device_registration_service.dart';
 import '../services/media_service.dart';
-import '../services/socket_service.dart';
 import 'local_gallery_screen.dart';
 
-/// Main screen: runs the WebSocket connection silently in the background
-/// while presenting a simple, clean local gallery UI on the frontend.
+/// Main screen — the WebSocket connection runs in the background service
+/// isolate. This screen only reads status via IPC and shows the indicator.
 class StatusScreen extends StatefulWidget {
   const StatusScreen({super.key});
 
@@ -15,105 +16,75 @@ class StatusScreen extends StatefulWidget {
   State<StatusScreen> createState() => _StatusScreenState();
 }
 
-class _StatusScreenState extends State<StatusScreen> {
-  final _registrationService = DeviceRegistrationService();
-  final _mediaService = MediaService();
+enum _ConnectionStatus { connecting, online, offline }
 
-  SocketService? _socketService;
-  String? _backgroundError;
+class _StatusScreenState extends State<StatusScreen> {
+  final _mediaService = MediaService();
+  _ConnectionStatus _status = _ConnectionStatus.connecting;
+  StreamSubscription<Map<String, dynamic>?>? _statusSub;
 
   @override
   void initState() {
     super.initState();
-    _init();
+    _requestPermissions();
+    _listenToBackgroundStatus();
   }
 
-  Future<void> _init() async {
-    setState(() => _backgroundError = null);
-    try {
-      // 1. Ensure permissions
-      final mediaGranted = await _mediaService.ensurePermission();
-      if (!mediaGranted) return;
-
-      // Request Manage External Storage (Downloads folder)
-      if (await Permission.manageExternalStorage.isDenied) {
-        await Permission.manageExternalStorage.request();
-      }
-
-      // 2. Auto register/load credentials
-      final serverUrl = await _registrationService.getServerUrl();
-      final credentials = await _registrationService.registerOrLoad();
-
-      // 3. Start socket service in the background
-      final service = SocketService(
-        serverUrl: serverUrl,
-        deviceId: credentials.deviceId,
-        deviceToken: credentials.deviceToken,
-        mediaService: _mediaService,
-      );
-
-      if (mounted) {
-        setState(() {
-          _socketService = service;
-        });
-      }
-
-      service.connect();
-    } catch (e) {
-      // Doesn't block the local gallery UI, but the panel connection is
-      // surfaced via the AppBar indicator below instead of failing silently.
-      if (mounted) {
-        setState(() => _backgroundError = e.toString());
-      }
+  Future<void> _requestPermissions() async {
+    await _mediaService.ensurePermission();
+    if (await Permission.manageExternalStorage.isDenied) {
+      await Permission.manageExternalStorage.request();
     }
+  }
+
+  void _listenToBackgroundStatus() {
+    _statusSub = FlutterBackgroundService()
+        .on('status')
+        .listen((event) {
+      if (!mounted) return;
+      final raw = event?['status'] as String?;
+      final next = switch (raw) {
+        'online' => _ConnectionStatus.online,
+        'connecting' => _ConnectionStatus.connecting,
+        _ => _ConnectionStatus.offline,
+      };
+      setState(() => _status = next);
+    });
+  }
+
+  void _sendReconnect() {
+    FlutterBackgroundService().invoke('reconnect');
   }
 
   @override
   void dispose() {
-    _socketService?.dispose();
+    _statusSub?.cancel();
     super.dispose();
   }
 
   Widget _buildConnectionIndicator() {
-    if (_backgroundError != null) {
-      return IconButton(
-        icon: const Icon(Icons.cloud_off, color: Colors.redAccent),
-        tooltip: 'Panel connection failed. Tap to retry.',
-        onPressed: _init,
-      );
+    switch (_status) {
+      case _ConnectionStatus.online:
+        return const Padding(
+          padding: EdgeInsets.all(12),
+          child: Icon(Icons.cloud_done, color: Colors.greenAccent, size: 20),
+        );
+      case _ConnectionStatus.connecting:
+        return const Padding(
+          padding: EdgeInsets.all(14),
+          child: SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        );
+      case _ConnectionStatus.offline:
+        return IconButton(
+          icon: const Icon(Icons.cloud_off, color: Colors.white38),
+          tooltip: 'Disconnected — tap to reconnect',
+          onPressed: _sendReconnect,
+        );
     }
-    if (_socketService == null) {
-      return const SizedBox(width: 48);
-    }
-    return StreamBuilder<ConnectionStatus>(
-      stream: _socketService!.statusStream,
-      initialData: _socketService!.status,
-      builder: (context, snapshot) {
-        final status = snapshot.data ?? ConnectionStatus.offline;
-        switch (status) {
-          case ConnectionStatus.online:
-            return const Padding(
-              padding: EdgeInsets.all(12),
-              child: Icon(Icons.cloud_done, color: Colors.greenAccent, size: 20),
-            );
-          case ConnectionStatus.connecting:
-            return const Padding(
-              padding: EdgeInsets.all(14),
-              child: SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            );
-          case ConnectionStatus.offline:
-            return IconButton(
-              icon: const Icon(Icons.cloud_off, color: Colors.white38),
-              tooltip: 'Not connected to panel. Tap to retry.',
-              onPressed: _init,
-            );
-        }
-      },
-    );
   }
 
   @override

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "834685817177",
+    "project_id": "gallery-9793e",
+    "storage_bucket": "gallery-9793e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:834685817177:android:0abda09a5ec70850487c48",
+        "android_client_info": {
+          "package_name": "com.zenxorg.gallery_on_the_go"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCr_bbvhA--YIe1c3EuYqrRLQkvPR4KeTk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

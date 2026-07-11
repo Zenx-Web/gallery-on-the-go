@@ -1,100 +1,113 @@
 /**
- * FCM Service
+ * FCM Service — FCM HTTP V1 API
  *
- * Firebase Cloud Messaging integration for waking up Android devices
- * that are in sleep mode. Sends high-priority data messages.
+ * Uses a Firebase Service Account (stored as a base64-encoded JSON string in
+ * FIREBASE_SERVICE_ACCOUNT) to obtain short-lived OAuth2 access tokens and
+ * send high-priority data messages via the FCM V1 endpoint.
+ *
+ * How to get FIREBASE_SERVICE_ACCOUNT:
+ *   Firebase Console → Project Settings → Service Accounts →
+ *   Generate new private key → download JSON →
+ *   base64 encode it:  base64 -w 0 service-account.json
  */
 
+import { GoogleAuth } from 'google-auth-library';
 import { env } from '../../config/env.js';
 
-interface FcmPayload {
-  deviceId: string;
-  action: 'wake' | 'reconnect';
+const FCM_ENDPOINT = `https://fcm.googleapis.com/v1/projects/gallery-9793e/messages:send`;
+
+let _auth: GoogleAuth | null = null;
+
+function getAuth(): GoogleAuth | null {
+  if (!env.FIREBASE_SERVICE_ACCOUNT) return null;
+  if (_auth) return _auth;
+
+  try {
+    const decoded = Buffer.from(env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf-8');
+    const credentials = JSON.parse(decoded);
+    _auth = new GoogleAuth({
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/firebase.messaging'],
+    });
+    return _auth;
+  } catch (err) {
+    console.error('  ❌ Failed to parse FIREBASE_SERVICE_ACCOUNT:', err);
+    return null;
+  }
 }
 
 /**
- * Send a wake-up push notification to an Android device via FCM.
- * Uses the legacy HTTP API (v1 migration can be done later).
- *
- * @param fcmToken - The device's FCM registration token
- * @param payload - Data payload to send
- * @returns true if the message was sent successfully
+ * Send a high-priority FCM data message to a device.
+ * Uses FCM HTTP V1 API (not the deprecated Legacy API).
  */
 export async function sendFcmMessage(
   fcmToken: string,
-  payload: FcmPayload
+  payload: { deviceId: string; action: 'wake' | 'reconnect' }
 ): Promise<boolean> {
-  if (!env.FCM_SERVER_KEY) {
-    console.warn('  ⚠️  FCM_SERVER_KEY not configured — skipping push notification');
+  const auth = getAuth();
+  if (!auth) {
+    console.warn('  ⚠️  FIREBASE_SERVICE_ACCOUNT not configured — skipping FCM push');
     return false;
   }
 
   try {
-    const response = await fetch('https://fcm.googleapis.com/fcm/send', {
+    const client = await auth.getClient();
+    const tokenResponse = await client.getAccessToken();
+    const accessToken = tokenResponse.token;
+
+    const response = await fetch(FCM_ENDPOINT, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `key=${env.FCM_SERVER_KEY}`,
+        'Authorization': `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        to: fcmToken,
-        priority: 'high',
-        data: {
-          type: 'gallery_wake',
-          action: payload.action,
-          deviceId: payload.deviceId,
-          timestamp: Date.now().toString(),
-        },
-        // High-priority data message — bypasses Doze mode
-        android: {
-          priority: 'high',
-          ttl: '60s',
+        message: {
+          token: fcmToken,
+          data: {
+            type: 'gallery_wake',
+            action: payload.action,
+            deviceId: payload.deviceId,
+            timestamp: Date.now().toString(),
+          },
+          android: {
+            priority: 'HIGH',
+            ttl: '60s',
+          },
         },
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`  ❌ FCM send failed (${response.status}):`, errorText);
+      console.error(`  ❌ FCM V1 send failed (${response.status}):`, errorText);
       return false;
     }
 
-    const result = await response.json() as { failure: number; results: unknown[] };
-
-    if (result.failure > 0) {
-      console.error('  ❌ FCM delivery failed:', result.results);
-      return false;
-    }
-
-    console.log(`  📲 FCM wake sent to device ${payload.deviceId}`);
+    console.log(`  📲 FCM V1 wake sent to device ${payload.deviceId}`);
     return true;
   } catch (err) {
-    console.error('  ❌ FCM send error:', err);
+    console.error('  ❌ FCM V1 send error:', err);
     return false;
   }
 }
 
 /**
  * Send a wake-up notification with retry logic.
- * Retries up to 3 times with exponential backoff.
  */
 export async function wakeDevice(
   fcmToken: string,
   deviceId: string,
-  maxRetries: number = 3
+  maxRetries = 3
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const success = await sendFcmMessage(fcmToken, {
-      deviceId,
-      action: 'wake',
-    });
-
+    const success = await sendFcmMessage(fcmToken, { deviceId, action: 'wake' });
     if (success) return true;
 
     if (attempt < maxRetries) {
-      const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
-      console.log(`  🔄 Retrying FCM wake (attempt ${attempt + 1}/${maxRetries}) in ${delay / 1000}s...`);
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      const delay = Math.pow(2, attempt) * 1000;
+      console.log(`  🔄 Retrying FCM wake (${attempt + 1}/${maxRetries}) in ${delay / 1000}s...`);
+      await new Promise((r) => setTimeout(r, delay));
     }
   }
 

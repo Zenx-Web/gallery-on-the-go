@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:flutter/services.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../core/constants.dart';
@@ -32,24 +31,6 @@ class SocketService {
   ConnectionStatus _status = ConnectionStatus.offline;
   ConnectionStatus get status => _status;
 
-  static const _channel = MethodChannel('com.zenxorg.gallery_on_the_go/foreground_service');
-
-  Future<void> _startForegroundService() async {
-    try {
-      await _channel.invokeMethod('startService');
-    } catch (e) {
-      print('Failed to start foreground service: $e');
-    }
-  }
-
-  Future<void> _stopForegroundService() async {
-    try {
-      await _channel.invokeMethod('stopService');
-    } catch (e) {
-      print('Failed to stop foreground service: $e');
-    }
-  }
-
   SocketService({
     required this.serverUrl,
     required this.deviceId,
@@ -59,7 +40,6 @@ class SocketService {
 
   void connect() {
     _setStatus(ConnectionStatus.connecting);
-    _startForegroundService();
 
     final socket = io.io(
       '$serverUrl/device',
@@ -93,6 +73,16 @@ class SocketService {
     socket.connect();
   }
 
+  /// Forces an immediate reconnect attempt.
+  /// Called by the background isolate when an FCM wake signal arrives.
+  void reconnect() {
+    if (_socket != null && !_socket!.connected) {
+      _socket!.connect();
+    } else if (_socket == null) {
+      connect();
+    }
+  }
+
   void disconnect() {
     _stopHeartbeat();
     _connectivitySub?.cancel();
@@ -100,7 +90,6 @@ class SocketService {
     _socket?.dispose();
     _socket = null;
     _setStatus(ConnectionStatus.offline);
-    _stopForegroundService();
   }
 
   void _setStatus(ConnectionStatus status) {
