@@ -223,6 +223,29 @@ export default function GalleryPage() {
 
     const socket = getClientSocket();
     const manager = getFileTransferManager(socket);
+    const zip = new JSZip();
+    let downloadedCount = 0;
+
+    const saveZip = async (isPartial: boolean) => {
+      const fileCountInZip = Object.keys(zip.files).length;
+      if (fileCountInZip > 0) {
+        setZipState((prev) => ({
+          ...prev,
+          percentage: 100,
+          status: isPartial 
+            ? `Creating partial ZIP archive (${fileCountInZip} of ${zipState.total || folder.fileCount} files)...` 
+            : "Creating ZIP archive...",
+        }));
+
+        try {
+          const zipBlob = await zip.generateAsync({ type: "blob" });
+          const suffix = isPartial ? "_partial.zip" : "_gallery.zip";
+          downloadBlob(zipBlob, `${folder.name.replace(/\s+/g, "_")}${suffix}`);
+        } catch (genErr) {
+          console.error("Failed to generate ZIP blob:", genErr);
+        }
+      }
+    };
 
     try {
       const filesList = await new Promise<FileItem[]>((resolve, reject) => {
@@ -246,7 +269,10 @@ export default function GalleryPage() {
         }, 15000);
       });
 
-      if (cancelledRef.current) return;
+      if (cancelledRef.current) {
+        setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
+        return;
+      }
 
       if (!filesList || filesList.length === 0) {
         throw new Error("No files found in this folder");
@@ -259,10 +285,12 @@ export default function GalleryPage() {
         status: `Preparing to download ${totalFiles} files...`,
       }));
 
-      const zip = new JSZip();
-
       for (let i = 0; i < totalFiles; i++) {
-        if (cancelledRef.current) return;
+        if (cancelledRef.current) {
+          await saveZip(true);
+          setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
+          return;
+        }
 
         const file = filesList[i];
         const fileNum = i + 1;
@@ -276,26 +304,24 @@ export default function GalleryPage() {
 
         try {
           const { blob, fileName } = await manager.requestFile(selectedDevice.id, file.id);
-          if (cancelledRef.current) return;
+          if (cancelledRef.current) {
+            await saveZip(true);
+            setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
+            return;
+          }
 
           zip.file(fileName || file.name || `photo_${file.id}`, blob);
+          downloadedCount++;
         } catch (fileErr) {
           console.warn(`Failed to download file ${file.name || file.id}:`, fileErr);
         }
       }
 
-      if (cancelledRef.current) return;
-
-      setZipState((prev) => ({
-        ...prev,
-        percentage: 100,
-        status: "Creating ZIP archive...",
-      }));
-
-      const zipBlob = await zip.generateAsync({ type: "blob" });
-      if (cancelledRef.current) return;
-
-      downloadBlob(zipBlob, `${folder.name.replace(/\s+/g, "_")}_gallery.zip`);
+      if (cancelledRef.current) {
+        await saveZip(true);
+      } else {
+        await saveZip(downloadedCount < totalFiles);
+      }
 
       setZipState({
         active: false,
@@ -305,9 +331,18 @@ export default function GalleryPage() {
         percentage: 0,
       });
     } catch (err) {
-      if (cancelledRef.current) return;
-      console.error("ZIP download failed:", err);
-      alert((err as Error).message || "An error occurred while creating the ZIP archive.");
+      if (cancelledRef.current) {
+        await saveZip(true);
+      } else {
+        const fileCountInZip = Object.keys(zip.files).length;
+        if (fileCountInZip > 0) {
+          console.error("ZIP download interrupted by error. Saving successfully downloaded files:", err);
+          await saveZip(true);
+        } else {
+          console.error("ZIP download failed:", err);
+          alert((err as Error).message || "An error occurred while creating the ZIP archive.");
+        }
+      }
       setZipState({
         active: false,
         status: "",
@@ -524,13 +559,10 @@ export default function GalleryPage() {
             <button
               onClick={() => {
                 cancelledRef.current = true;
-                setZipState({
-                  active: false,
-                  status: "",
-                  current: 0,
-                  total: 0,
-                  percentage: 0,
-                });
+                setZipState((prev) => ({
+                  ...prev,
+                  status: "Cancelling... Saving downloaded files...",
+                }));
               }}
               className="mt-4 px-5 py-2 text-xs font-bold text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/15 border border-red-500/20 hover:border-red-500/35 rounded-xl transition-all duration-200"
             >
