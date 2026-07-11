@@ -105,7 +105,7 @@ export class FileTransferManager {
       clearTimeout(pending.timeout);
       this.pendingThumbnails.delete(data.fileId);
 
-      const blob = new Blob([parseBinaryData(data.data)], { type: "image/jpeg" });
+      const blob = new Blob([parseBinaryData(data.data) as BlobPart], { type: "image/jpeg" });
       pending.resolve(URL.createObjectURL(blob));
     });
   }
