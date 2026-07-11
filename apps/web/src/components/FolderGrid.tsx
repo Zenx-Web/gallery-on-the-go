@@ -19,6 +19,7 @@ export interface FolderItem {
 interface FolderGridProps {
   folders: FolderItem[];
   onFolderClick: (folder: FolderItem) => void;
+  onDownloadZip?: (folder: FolderItem) => void;
 }
 
 const folderIcons: Record<string, typeof Folder> = {
@@ -41,7 +42,7 @@ const folderColors: Record<string, string> = {
   other: "from-[var(--color-accent-primary)]/15 to-[var(--color-accent-secondary)]/10",
 };
 
-export default function FolderGrid({ folders, onFolderClick }: FolderGridProps) {
+export default function FolderGrid({ folders, onFolderClick, onDownloadZip }: FolderGridProps) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
       {folders.map((folder, index) => {
@@ -56,8 +57,20 @@ export default function FolderGrid({ folders, onFolderClick }: FolderGridProps) 
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.05, duration: 0.35, ease: "easeOut" }}
             onClick={() => onFolderClick(folder)}
-            className="folder-card group"
+            className="folder-card group relative"
           >
+            {onDownloadZip && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDownloadZip(folder);
+                }}
+                className="absolute top-2 right-2 p-1.5 rounded-lg bg-[var(--color-surface-glass)] border border-[var(--color-border-subtle)] text-[var(--color-text-tertiary)] hover:text-[var(--color-accent-primary)] hover:border-[var(--color-accent-primary)] opacity-0 group-hover:opacity-100 transition-all duration-200"
+                title="Download Folder as ZIP"
+              >
+                <Download className="w-3.5 h-3.5" />
+              </button>
+            )}
             {/* Cover Thumbnail or Icon */}
             {folder.coverUrl ? (
               <div className="w-16 h-16 rounded-xl overflow-hidden ring-1 ring-white/10 transition-transform duration-300 group-hover:scale-110">
