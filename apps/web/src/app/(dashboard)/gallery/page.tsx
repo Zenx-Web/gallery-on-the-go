@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import JSZip from "jszip";
+import { downloadZip } from "client-zip";
 import { SOCKET_EVENTS, PAGINATION } from "@gallery/shared";
 import type { FileItem, GalleryAlbum } from "@gallery/shared";
 import TopBar from "@/components/TopBar";
@@ -36,6 +37,12 @@ import {
   Smartphone,
   Download,
 } from "lucide-react";
+
+function sortByNewest(list: FileItem[]): FileItem[] {
+  return [...list].sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+}
 
 function albumToFolder(album: GalleryAlbum): FolderItem {
   return { id: album.id, name: album.name, fileCount: album.fileCount };
@@ -114,7 +121,7 @@ export default function GalleryPage() {
 
       const socket = getClientSocket();
       const onAlbumFiles = (data: { files: FileItem[] }) => {
-        setFiles(data.files);
+        setFiles(sortByNewest(data.files));
         setFilesLoading(false);
         socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
       };
@@ -221,22 +228,115 @@ export default function GalleryPage() {
     }
   };
 
-  const downloadFolderAsZip = async (folder: FolderItem) => {
-    if (!selectedDevice) return;
-
-    setZipState({
-      active: true,
-      status: "Requesting folder contents...",
-      current: 0,
-      total: folder.fileCount || 0,
-      percentage: 0,
-    });
-    cancelledRef.current = false;
-
+  const fetchFolderFileList = (folder: FolderItem): Promise<FileItem[]> => {
     const socket = getClientSocket();
-    const manager = getFileTransferManager(socket);
+    return new Promise<FileItem[]>((resolve, reject) => {
+      const onAlbumFiles = (data: { files: FileItem[] }) => {
+        socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
+        resolve(sortByNewest(data.files));
+      };
+
+      socket.on(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
+
+      socket.emit(SOCKET_EVENTS.GALLERY.ALBUM_FILES, {
+        deviceId: selectedDevice!.id,
+        albumId: folder.id,
+        page: 1,
+        pageSize: Math.max(folder.fileCount || 50, 1000),
+      });
+
+      // Scale the timeout with folder size — enumerating a large album can
+      // take a while on the device side, and 15s was too tight for those.
+      const listingTimeout = Math.min(Math.max(30000, (folder.fileCount || 0) * 50), 60000);
+      setTimeout(() => {
+        socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
+        reject(new Error("Failed to retrieve folder contents (timeout)"));
+      }, listingTimeout);
+    });
+  };
+
+  // Downloads files with bounded concurrency and yields each successful
+  // result as soon as it's ready, instead of collecting them all first — lets
+  // a streaming ZIP writer emit entries without holding the whole folder in
+  // memory at once.
+  async function* streamZipEntries(
+    filesList: FileItem[],
+    manager: ReturnType<typeof getFileTransferManager>,
+    deviceId: string,
+    onProgress: (settled: number, total: number) => void
+  ): AsyncGenerator<{ name: string; input: Blob }> {
+    const total = filesList.length;
+    const ready: { name: string; input: Blob }[] = [];
+    let nextIndex = 0;
+    let settledCount = 0;
+    let activeWorkers = 0;
+    let wake: (() => void) | null = null;
+
+    const notify = () => {
+      if (wake) {
+        const w = wake;
+        wake = null;
+        w();
+      }
+    };
+
+    async function worker() {
+      activeWorkers++;
+      try {
+        while (nextIndex < filesList.length) {
+          if (cancelledRef.current) return;
+          const file = filesList[nextIndex++];
+
+          let result: { blob: Blob; fileName: string } | null = null;
+          for (let attempt = 0; attempt <= ZIP_FILE_RETRIES; attempt++) {
+            if (cancelledRef.current) return;
+            try {
+              const { blob, fileName } = await manager.requestFile(deviceId, file.id);
+              result = { blob, fileName: fileName || file.name || `photo_${file.id}` };
+              break;
+            } catch (fileErr) {
+              if (attempt < ZIP_FILE_RETRIES) await sleep(500 * (attempt + 1));
+              else console.warn(`Failed to download file ${file.name || file.id} after retries:`, fileErr);
+            }
+          }
+
+          settledCount++;
+          onProgress(settledCount, total);
+          if (result) ready.push({ name: result.fileName, input: result.blob });
+          notify();
+        }
+      } finally {
+        activeWorkers--;
+        notify();
+      }
+    }
+
+    const workers = Array.from({ length: Math.min(ZIP_DOWNLOAD_CONCURRENCY, filesList.length) }, worker);
+
+    while (true) {
+      if (ready.length > 0) {
+        yield ready.shift()!;
+        continue;
+      }
+      if (cancelledRef.current || (activeWorkers === 0 && nextIndex >= filesList.length)) {
+        break;
+      }
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+    }
+
+    await Promise.all(workers);
+  }
+
+  const downloadFolderViaJSZip = async (
+    folder: FolderItem,
+    filesList: FileItem[],
+    manager: ReturnType<typeof getFileTransferManager>
+  ) => {
     const zip = new JSZip();
     let downloadedCount = 0;
+    const totalFiles = filesList.length;
 
     const saveZip = async (isPartial: boolean) => {
       const fileCountInZip = Object.keys(zip.files).length;
@@ -244,8 +344,8 @@ export default function GalleryPage() {
         setZipState((prev) => ({
           ...prev,
           percentage: 100,
-          status: isPartial 
-            ? `Creating partial ZIP archive (${fileCountInZip} of ${zipState.total || folder.fileCount} files)...` 
+          status: isPartial
+            ? `Creating partial ZIP archive (${fileCountInZip} of ${totalFiles} files)...`
             : "Creating ZIP archive...",
         }));
 
@@ -260,51 +360,7 @@ export default function GalleryPage() {
     };
 
     try {
-      const filesList = await new Promise<FileItem[]>((resolve, reject) => {
-        const onAlbumFiles = (data: { files: FileItem[] }) => {
-          socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
-          resolve(data.files);
-        };
-
-        socket.on(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
-
-        socket.emit(SOCKET_EVENTS.GALLERY.ALBUM_FILES, {
-          deviceId: selectedDevice.id,
-          albumId: folder.id,
-          page: 1,
-          pageSize: Math.max(folder.fileCount || 50, 1000),
-        });
-
-        // Scale the timeout with folder size — enumerating a large album can
-        // take a while on the device side, and 15s was too tight for those.
-        const listingTimeout = Math.min(
-          Math.max(30000, (folder.fileCount || 0) * 50),
-          60000
-        );
-        setTimeout(() => {
-          socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
-          reject(new Error("Failed to retrieve folder contents (timeout)"));
-        }, listingTimeout);
-      });
-
-      if (cancelledRef.current) {
-        setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
-        return;
-      }
-
-      if (!filesList || filesList.length === 0) {
-        throw new Error("No files found in this folder");
-      }
-
-      const totalFiles = filesList.length;
-      setZipState((prev) => ({
-        ...prev,
-        total: totalFiles,
-        status: `Preparing to download ${totalFiles} files...`,
-      }));
-
       let settledCount = 0;
-
       await runWithConcurrency(filesList, ZIP_DOWNLOAD_CONCURRENCY, async (file) => {
         if (cancelledRef.current) return;
 
@@ -312,7 +368,7 @@ export default function GalleryPage() {
         for (let attempt = 0; attempt <= ZIP_FILE_RETRIES; attempt++) {
           if (cancelledRef.current) return;
           try {
-            const { blob, fileName } = await manager.requestFile(selectedDevice.id, file.id);
+            const { blob, fileName } = await manager.requestFile(selectedDevice!.id, file.id);
             if (cancelledRef.current) return;
             zip.file(fileName || file.name || `photo_${file.id}`, blob);
             downloadedCount++;
@@ -342,14 +398,6 @@ export default function GalleryPage() {
       } else {
         await saveZip(downloadedCount < totalFiles);
       }
-
-      setZipState({
-        active: false,
-        status: "",
-        current: 0,
-        total: 0,
-        percentage: 0,
-      });
     } catch (err) {
       if (cancelledRef.current) {
         await saveZip(true);
@@ -359,17 +407,109 @@ export default function GalleryPage() {
           console.error("ZIP download interrupted by error. Saving successfully downloaded files:", err);
           await saveZip(true);
         } else {
-          console.error("ZIP download failed:", err);
-          alert((err as Error).message || "An error occurred while creating the ZIP archive.");
+          throw err;
         }
       }
+    }
+  };
+
+  // Streams the ZIP directly to disk via the File System Access API so peak
+  // memory stays bounded to a handful of in-flight files (ZIP_DOWNLOAD_CONCURRENCY)
+  // instead of the whole folder — avoids the OOM risk of buffering every file
+  // in memory before building one giant blob (see downloadFolderViaJSZip).
+  const downloadFolderViaStream = async (
+    folder: FolderItem,
+    filesList: FileItem[],
+    manager: ReturnType<typeof getFileTransferManager>
+  ) => {
+    const totalFiles = filesList.length;
+    const showSaveFilePicker = (window as unknown as {
+      showSaveFilePicker?: (opts: unknown) => Promise<FileSystemFileHandle>;
+    }).showSaveFilePicker!;
+
+    const handle = await showSaveFilePicker({
+      suggestedName: `${folder.name.replace(/\s+/g, "_")}_gallery.zip`,
+      types: [{ description: "ZIP archive", accept: { "application/zip": [".zip"] } }],
+    });
+    const writable = await (handle as unknown as {
+      createWritable: () => Promise<WritableStream<Uint8Array>>;
+    }).createWritable();
+
+    let settledCount = 0;
+    const entries = streamZipEntries(filesList, manager, selectedDevice!.id, (settled, total) => {
+      settledCount = settled;
       setZipState({
-        active: false,
-        status: "",
-        current: 0,
-        total: 0,
-        percentage: 0,
+        active: true,
+        status: `Downloading files (${settled} of ${total})...`,
+        current: settled,
+        total,
+        percentage: Math.round((settled / total) * 100),
       });
+    });
+
+    const response = downloadZip(entries);
+    try {
+      await response.body!.pipeTo(writable);
+    } catch (err) {
+      if (cancelledRef.current) {
+        setZipState((prev) => ({ ...prev, status: "Download cancelled. Removing partial file..." }));
+      } else {
+        throw err;
+      }
+    }
+
+    if (cancelledRef.current) {
+      console.warn(`ZIP download cancelled after ${settledCount} of ${totalFiles} files.`);
+    }
+  };
+
+  const downloadFolderAsZip = async (folder: FolderItem) => {
+    if (!selectedDevice) return;
+
+    setZipState({
+      active: true,
+      status: "Requesting folder contents...",
+      current: 0,
+      total: folder.fileCount || 0,
+      percentage: 0,
+    });
+    cancelledRef.current = false;
+
+    const socket = getClientSocket();
+    const manager = getFileTransferManager(socket);
+
+    try {
+      const filesList = await fetchFolderFileList(folder);
+
+      if (cancelledRef.current) {
+        setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
+        return;
+      }
+
+      if (!filesList || filesList.length === 0) {
+        throw new Error("No files found in this folder");
+      }
+
+      setZipState((prev) => ({
+        ...prev,
+        total: filesList.length,
+        status: `Preparing to download ${filesList.length} files...`,
+      }));
+
+      const canStream = typeof window !== "undefined" && "showSaveFilePicker" in window;
+      if (canStream) {
+        await downloadFolderViaStream(folder, filesList, manager);
+      } else {
+        await downloadFolderViaJSZip(folder, filesList, manager);
+      }
+    } catch (err) {
+      // showSaveFilePicker throws AbortError if the user dismisses the save dialog.
+      if ((err as { name?: string }).name !== "AbortError") {
+        console.error("ZIP download failed:", err);
+        alert((err as Error).message || "An error occurred while creating the ZIP archive.");
+      }
+    } finally {
+      setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
     }
   };
 

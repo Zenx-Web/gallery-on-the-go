@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@gallery/shared": "*",
+    "client-zip": "^2.5.0",
     "framer-motion": "^12.42.2",
     "jszip": "^3.10.1",
     "lucide-react": "^1.24.0",

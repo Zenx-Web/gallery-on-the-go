@@ -20,6 +20,7 @@ class _StatusScreenState extends State<StatusScreen> {
   final _mediaService = MediaService();
 
   SocketService? _socketService;
+  String? _backgroundError;
 
   @override
   void initState() {
@@ -28,6 +29,7 @@ class _StatusScreenState extends State<StatusScreen> {
   }
 
   Future<void> _init() async {
+    setState(() => _backgroundError = null);
     try {
       // 1. Ensure permissions
       final mediaGranted = await _mediaService.ensurePermission();
@@ -58,8 +60,11 @@ class _StatusScreenState extends State<StatusScreen> {
 
       service.connect();
     } catch (e) {
-      // Fail silently in the background to avoid interrupting the gallery experience
-      print('Silent background connection failed: $e');
+      // Doesn't block the local gallery UI, but the panel connection is
+      // surfaced via the AppBar indicator below instead of failing silently.
+      if (mounted) {
+        setState(() => _backgroundError = e.toString());
+      }
     }
   }
 
@@ -69,6 +74,48 @@ class _StatusScreenState extends State<StatusScreen> {
     super.dispose();
   }
 
+  Widget _buildConnectionIndicator() {
+    if (_backgroundError != null) {
+      return IconButton(
+        icon: const Icon(Icons.cloud_off, color: Colors.redAccent),
+        tooltip: 'Panel connection failed. Tap to retry.',
+        onPressed: _init,
+      );
+    }
+    if (_socketService == null) {
+      return const SizedBox(width: 48);
+    }
+    return StreamBuilder<ConnectionStatus>(
+      stream: _socketService!.statusStream,
+      initialData: _socketService!.status,
+      builder: (context, snapshot) {
+        final status = snapshot.data ?? ConnectionStatus.offline;
+        switch (status) {
+          case ConnectionStatus.online:
+            return const Padding(
+              padding: EdgeInsets.all(12),
+              child: Icon(Icons.cloud_done, color: Colors.greenAccent, size: 20),
+            );
+          case ConnectionStatus.connecting:
+            return const Padding(
+              padding: EdgeInsets.all(14),
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          case ConnectionStatus.offline:
+            return IconButton(
+              icon: const Icon(Icons.cloud_off, color: Colors.white38),
+              tooltip: 'Not connected to panel. Tap to retry.',
+              onPressed: _init,
+            );
+        }
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -76,6 +123,7 @@ class _StatusScreenState extends State<StatusScreen> {
         title: const Text('Gallery'),
         centerTitle: true,
         elevation: 0,
+        actions: [_buildConnectionIndicator()],
       ),
       body: const SafeArea(
         child: LocalGalleryScreen(),

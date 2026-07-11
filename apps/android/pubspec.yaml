@@ -43,6 +43,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   photo_manager_image_provider: ^2.2.0
 
+  # Video playback in the fullscreen media viewer
+  video_player: ^2.9.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
