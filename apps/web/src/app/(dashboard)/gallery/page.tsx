@@ -18,6 +18,15 @@ import EmptyState from "@/components/EmptyState";
 import { useDevices } from "@/contexts/DeviceContext";
 import { getClientSocket } from "@/lib/socket";
 import { getFileTransferManager, downloadBlob } from "@/lib/fileTransfer";
+import { runWithConcurrency } from "@/lib/concurrency";
+
+const THUMBNAIL_CONCURRENCY = 5;
+const ZIP_DOWNLOAD_CONCURRENCY = 4;
+const ZIP_FILE_RETRIES = 2;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 import {
   ArrowLeft,
   Grid3X3,
@@ -132,18 +141,21 @@ export default function GalleryPage() {
     const manager = getFileTransferManager(socket);
     let cancelled = false;
 
-    files.forEach((file) => {
-      if (thumbnails[file.id]) return;
-      manager
-        .requestThumbnail(selectedDevice.id, file.id)
-        .then((url) => {
-          if (cancelled) return;
-          thumbnailUrlsRef.current.push(url);
-          setThumbnails((prev) => ({ ...prev, [file.id]: url }));
-        })
-        .catch(() => {
-          // Leave the photo without a thumbnail; PhotoGrid still shows the name.
-        });
+    const pendingFiles = files.filter((file) => !thumbnails[file.id]);
+
+    // Throttled, not one request per file at once — the device handles each
+    // thumbnail request as its own async job, and firing them all
+    // simultaneously floods it, causing most to time out (see fileTransfer.ts).
+    runWithConcurrency(pendingFiles, THUMBNAIL_CONCURRENCY, async (file) => {
+      if (cancelled) return;
+      try {
+        const url = await manager.requestThumbnail(selectedDevice.id, file.id);
+        if (cancelled) return;
+        thumbnailUrlsRef.current.push(url);
+        setThumbnails((prev) => ({ ...prev, [file.id]: url }));
+      } catch {
+        // Leave the photo without a thumbnail; PhotoGrid still shows the name.
+      }
     });
 
     return () => {
@@ -263,10 +275,16 @@ export default function GalleryPage() {
           pageSize: Math.max(folder.fileCount || 50, 1000),
         });
 
+        // Scale the timeout with folder size — enumerating a large album can
+        // take a while on the device side, and 15s was too tight for those.
+        const listingTimeout = Math.min(
+          Math.max(30000, (folder.fileCount || 0) * 50),
+          60000
+        );
         setTimeout(() => {
           socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
           reject(new Error("Failed to retrieve folder contents (timeout)"));
-        }, 15000);
+        }, listingTimeout);
       });
 
       if (cancelledRef.current) {
@@ -285,37 +303,39 @@ export default function GalleryPage() {
         status: `Preparing to download ${totalFiles} files...`,
       }));
 
-      for (let i = 0; i < totalFiles; i++) {
-        if (cancelledRef.current) {
-          await saveZip(true);
-          setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
-          return;
+      let settledCount = 0;
+
+      await runWithConcurrency(filesList, ZIP_DOWNLOAD_CONCURRENCY, async (file) => {
+        if (cancelledRef.current) return;
+
+        let lastErr: unknown;
+        for (let attempt = 0; attempt <= ZIP_FILE_RETRIES; attempt++) {
+          if (cancelledRef.current) return;
+          try {
+            const { blob, fileName } = await manager.requestFile(selectedDevice.id, file.id);
+            if (cancelledRef.current) return;
+            zip.file(fileName || file.name || `photo_${file.id}`, blob);
+            downloadedCount++;
+            lastErr = undefined;
+            break;
+          } catch (fileErr) {
+            lastErr = fileErr;
+            if (attempt < ZIP_FILE_RETRIES) await sleep(500 * (attempt + 1));
+          }
+        }
+        if (lastErr) {
+          console.warn(`Failed to download file ${file.name || file.id} after retries:`, lastErr);
         }
 
-        const file = filesList[i];
-        const fileNum = i + 1;
+        settledCount++;
         setZipState({
           active: true,
-          status: `Downloading ${file.name} (${fileNum} of ${totalFiles})...`,
-          current: fileNum,
+          status: `Downloading files (${settledCount} of ${totalFiles})...`,
+          current: settledCount,
           total: totalFiles,
-          percentage: Math.round(((fileNum - 1) / totalFiles) * 100),
+          percentage: Math.round((settledCount / totalFiles) * 100),
         });
-
-        try {
-          const { blob, fileName } = await manager.requestFile(selectedDevice.id, file.id);
-          if (cancelledRef.current) {
-            await saveZip(true);
-            setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
-            return;
-          }
-
-          zip.file(fileName || file.name || `photo_${file.id}`, blob);
-          downloadedCount++;
-        } catch (fileErr) {
-          console.warn(`Failed to download file ${file.name || file.id}:`, fileErr);
-        }
-      }
+      });
 
       if (cancelledRef.current) {
         await saveZip(true);

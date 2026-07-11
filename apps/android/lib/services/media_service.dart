@@ -16,6 +16,10 @@ class MediaService {
   final Map<String, AssetEntity> _assetCache = {};
   final Map<String, File> _downloadFileCache = {};
 
+  static final FilterOptionGroup _newestFirst = FilterOptionGroup(
+    orders: [const OrderOption(type: OrderOptionType.createDate, asc: false)],
+  );
+
   Future<bool> ensurePermission() async {
     final result = await PhotoManager.requestPermissionExtend();
     return result.isAuth || result.hasAccess;
@@ -27,6 +31,7 @@ class MediaService {
     final paths = await PhotoManager.getAssetPathList(
       type: RequestType.common,
       onlyAll: false,
+      filterOption: _newestFirst,
     );
 
     var totalFiles = 0;
@@ -52,6 +57,7 @@ class MediaService {
     final paths = await PhotoManager.getAssetPathList(
       type: RequestType.common,
       onlyAll: false,
+      filterOption: _newestFirst,
     );
     final album = paths.where((p) => p.id == albumId).firstOrNull;
 
@@ -183,6 +189,7 @@ class MediaService {
     final paths = await PhotoManager.getAssetPathList(
       type: RequestType.common,
       onlyAll: true,
+      filterOption: _newestFirst,
     );
     if (paths.isEmpty) return [];
     final all = paths.first;
