@@ -37,7 +37,12 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem(SELECTED_DEVICE_KEY);
+    }
+    return null;
+  });
 
   const refresh = useCallback(async () => {
     try {
@@ -53,7 +58,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setSelectedId(localStorage.getItem(SELECTED_DEVICE_KEY));
     refresh();
   }, [refresh]);
 
@@ -66,8 +70,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     const fallback =
       devices.find((d) => d.status === "online") ?? devices[0] ?? null;
     if (fallback) {
-      setSelectedId(fallback.id);
-      localStorage.setItem(SELECTED_DEVICE_KEY, fallback.id);
+      setTimeout(() => {
+        setSelectedId(fallback.id);
+        localStorage.setItem(SELECTED_DEVICE_KEY, fallback.id);
+      }, 0);
     }
   }, [devices, selectedId]);
 

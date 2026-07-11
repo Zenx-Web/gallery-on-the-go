@@ -8,7 +8,7 @@
  * listener per call (which would leak across repeated requests to the same
  * socket).
  */
-
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Socket } from "socket.io-client";
 import { SOCKET_EVENTS, TIMEOUTS } from "@gallery/shared";
 

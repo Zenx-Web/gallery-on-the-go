@@ -24,7 +24,7 @@ export default function DashboardLayout({
     if (!token) {
       // In development, allow access without token for UI preview
       if (process.env.NODE_ENV === "development") {
-        setAuthenticated(true);
+        setTimeout(() => setAuthenticated(true), 0);
         return;
       }
       disconnectClientSocket();

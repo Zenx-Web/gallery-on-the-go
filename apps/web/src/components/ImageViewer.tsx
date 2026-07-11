@@ -90,7 +90,9 @@ export default function ImageViewer({
 
   // Reset zoom on image change
   useEffect(() => {
-    setZoom(1);
+    setTimeout(() => {
+      setZoom(1);
+    }, 0);
   }, [imageUrl]);
 
   return (
