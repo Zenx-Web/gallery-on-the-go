@@ -18,11 +18,10 @@ class DeviceRegistrationService {
   static const _kDeviceName = 'gallery.device_name';
   static const _kInstallSuffix = 'gallery.install_suffix';
 
-  static const String defaultServerUrl = 'http://localhost:3001';
+  static const String defaultServerUrl = 'https://gallery-on-the-go-backend.onrender.com';
 
   Future<String> getServerUrl() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_kServerUrl) ?? defaultServerUrl;
+    return defaultServerUrl;
   }
 
   Future<void> setServerUrl(String url) async {

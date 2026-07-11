@@ -28,6 +28,22 @@ interface PendingThumbnail {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+function parseBinaryData(data: any): Uint8Array {
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  }
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+  if (data && data.type === "Buffer" && Array.isArray(data.data)) {
+    return new Uint8Array(data.data);
+  }
+  if (Array.isArray(data)) {
+    return new Uint8Array(data);
+  }
+  return new Uint8Array(data || []);
+}
+
 export class FileTransferManager {
   private socket: Socket;
   private pendingFiles = new Map<string, PendingFile>();
@@ -50,7 +66,7 @@ export class FileTransferManager {
       pending.totalChunks = data.totalChunks;
       pending.mimeType = data.mimeType;
       pending.fileName = data.fileName;
-      pending.chunks[data.chunkIndex] = new Uint8Array(data.data);
+      pending.chunks[data.chunkIndex] = parseBinaryData(data.data);
     });
 
     this.socket.on(SOCKET_EVENTS.FILE.COMPLETE, (data: any) => {
@@ -89,7 +105,7 @@ export class FileTransferManager {
       clearTimeout(pending.timeout);
       this.pendingThumbnails.delete(data.fileId);
 
-      const blob = new Blob([new Uint8Array(data.data)], { type: "image/jpeg" });
+      const blob = new Blob([parseBinaryData(data.data)], { type: "image/jpeg" });
       pending.resolve(URL.createObjectURL(blob));
     });
   }
