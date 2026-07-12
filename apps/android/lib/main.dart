@@ -9,16 +9,22 @@ import 'services/fcm_handler.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Firebase must be initialised before any Firebase call.
-  await Firebase.initializeApp();
+  // Firebase/background-service setup must never prevent the app from
+  // rendering — a failure here used to crash the app before runApp().
+  try {
+    // Firebase must be initialised before any Firebase call.
+    await Firebase.initializeApp();
 
-  // Register the top-level FCM background handler (before runApp).
-  // This is called by Firebase when a data message arrives and the process
-  // is not running — it must be a top-level function.
-  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    // Register the top-level FCM background handler (before runApp).
+    // This is called by Firebase when a data message arrives and the process
+    // is not running — it must be a top-level function.
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
-  // Configure and start the background service (socket lives in there).
-  await initializeBackgroundService();
+    // Configure and start the background service (socket lives in there).
+    await initializeBackgroundService();
+  } catch (e, stackTrace) {
+    debugPrint('Startup init failed: $e\n$stackTrace');
+  }
 
   runApp(const GalleryOnTheGoApp());
 }

@@ -19,6 +19,10 @@ Future<void> initializeBackgroundService() async {
       // (via flutter_background_service's built-in BOOT_COMPLETED receiver).
       autoStart: true,
       isForegroundMode: true,
+      // Channel is created natively in GalleryApplication.onCreate — the
+      // plugin itself only auto-creates a channel for its own default id,
+      // so a custom id here must be pre-registered or startForeground
+      // throws CannotPostForegroundServiceNotificationException.
       notificationChannelId: 'gallery_relay_channel',
       initialNotificationTitle: 'GalleryOnTheGo',
       initialNotificationContent: 'Starting…',

@@ -29,7 +29,7 @@
 
     <application
         android:label="GalleryOnTheGo"
-        android:name="${applicationName}"
+        android:name=".GalleryApplication"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true">
         <activity
