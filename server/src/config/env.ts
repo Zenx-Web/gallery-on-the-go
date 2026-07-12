@@ -39,7 +39,7 @@ const envSchema = z.object({
   // Firebase Console → Project Settings → Service Accounts → Generate new private key
   FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
 
-  // CORS
+  // CORS — comma-separated list of allowed origins
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
 });
 
@@ -68,3 +68,8 @@ function validateEnv() {
 export const env = validateEnv();
 
 export type Env = z.infer<typeof envSchema>;
+
+// CORS_ORIGIN may be a single origin or a comma-separated list (e.g. prod +
+// a local dev origin) — split once here so both the HTTP and Socket.IO CORS
+// configs can pass an array/matcher instead of a single fixed string.
+export const corsOrigins = env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean);

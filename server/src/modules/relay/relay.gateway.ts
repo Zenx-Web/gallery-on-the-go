@@ -12,7 +12,7 @@
 import { Server as HttpServer } from 'http';
 import { Server, Namespace, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
-import { env } from '../../config/env.js';
+import { env, corsOrigins } from '../../config/env.js';
 import { SOCKET_EVENTS, TIMEOUTS } from '@gallery/shared';
 import {
   validateDeviceToken,
@@ -34,7 +34,7 @@ let clientNamespace: Namespace;
 export function initializeSocketIO(httpServer: HttpServer): Server {
   io = new Server(httpServer, {
     cors: {
-      origin: env.CORS_ORIGIN,
+      origin: corsOrigins,
       credentials: true,
     },
     pingInterval: TIMEOUTS.DEVICE_HEARTBEAT_INTERVAL,

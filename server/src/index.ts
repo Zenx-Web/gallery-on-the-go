@@ -9,7 +9,7 @@ import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { env } from './config/env.js';
+import { env, corsOrigins } from './config/env.js';
 import { testSupabaseConnection } from './config/supabase.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { deviceRoutes } from './modules/device/device.routes.js';
@@ -23,7 +23,7 @@ const httpServer = createServer(app);
 // ─── Security ───
 app.use(helmet());
 app.use(cors({
-  origin: env.CORS_ORIGIN,
+  origin: corsOrigins,
   credentials: true,
 }));
 
