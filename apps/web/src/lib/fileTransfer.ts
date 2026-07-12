@@ -11,6 +11,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Socket } from "socket.io-client";
 import { SOCKET_EVENTS, TIMEOUTS } from "@gallery/shared";
+import type { FileItem } from "@gallery/shared";
 
 interface PendingFile {
   chunks: Uint8Array[];
@@ -26,6 +27,34 @@ interface PendingThumbnail {
   resolve: (url: string) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
+}
+
+interface PendingDelete {
+  resolve: () => void;
+  reject: (err: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+interface PendingRename {
+  resolve: (newName: string) => void;
+  reject: (err: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+interface PendingEdit {
+  resolve: (newFile: FileItem) => void;
+  reject: (err: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+export interface EditOptions {
+  rotateDegrees?: number;
+  cropX?: number;
+  cropY?: number;
+  cropWidth?: number;
+  cropHeight?: number;
+  brightness?: number;
+  contrast?: number;
 }
 
 function parseBinaryData(data: any): Uint8Array {
@@ -48,6 +77,9 @@ export class FileTransferManager {
   private socket: Socket;
   private pendingFiles = new Map<string, PendingFile>();
   private pendingThumbnails = new Map<string, PendingThumbnail>();
+  private pendingDeletes = new Map<string, PendingDelete>();
+  private pendingRenames = new Map<string, PendingRename>();
+  private pendingEdits = new Map<string, PendingEdit>();
   private listenersAttached = false;
 
   constructor(socket: Socket) {
@@ -96,6 +128,51 @@ export class FileTransferManager {
         this.pendingThumbnails.delete(data.fileId);
         pendingThumb.reject(new Error(data.message || "Thumbnail request failed"));
       }
+
+      const pendingDelete = this.pendingDeletes.get(data.fileId);
+      if (pendingDelete) {
+        clearTimeout(pendingDelete.timeout);
+        this.pendingDeletes.delete(data.fileId);
+        pendingDelete.reject(new Error(data.message || "Delete failed"));
+      }
+
+      const pendingRename = this.pendingRenames.get(data.fileId);
+      if (pendingRename) {
+        clearTimeout(pendingRename.timeout);
+        this.pendingRenames.delete(data.fileId);
+        pendingRename.reject(new Error(data.message || "Rename failed"));
+      }
+
+      const pendingEdit = this.pendingEdits.get(data.fileId);
+      if (pendingEdit) {
+        clearTimeout(pendingEdit.timeout);
+        this.pendingEdits.delete(data.fileId);
+        pendingEdit.reject(new Error(data.message || "Edit failed"));
+      }
+    });
+
+    this.socket.on(SOCKET_EVENTS.FILE.DELETE_RESPONSE, (data: any) => {
+      const pending = this.pendingDeletes.get(data.fileId);
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      this.pendingDeletes.delete(data.fileId);
+      pending.resolve();
+    });
+
+    this.socket.on(SOCKET_EVENTS.FILE.RENAME_RESPONSE, (data: any) => {
+      const pending = this.pendingRenames.get(data.fileId);
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      this.pendingRenames.delete(data.fileId);
+      pending.resolve(data.newName);
+    });
+
+    this.socket.on(SOCKET_EVENTS.FILE.EDIT_RESPONSE, (data: any) => {
+      const pending = this.pendingEdits.get(data.fileId);
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      this.pendingEdits.delete(data.fileId);
+      pending.resolve(data.newFile);
     });
 
     this.socket.on(SOCKET_EVENTS.FILE.THUMBNAIL_RESPONSE, (data: any) => {
@@ -105,7 +182,19 @@ export class FileTransferManager {
       clearTimeout(pending.timeout);
       this.pendingThumbnails.delete(data.fileId);
 
-      const blob = new Blob([parseBinaryData(data.data) as BlobPart], { type: "image/jpeg" });
+      const bytes = parseBinaryData(data.data);
+      // Temporary diagnostic: dump the raw payload shape + magic bytes so we
+      // can tell apart "wrong format" (webp/png/etc — decodable, wrong type
+      // header) from "not actually image bytes at all" (wrong parse branch,
+      // truncated payload, JSON/text mistakenly sent as data).
+      const magic = Array.from(bytes.slice(0, 12))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(" ");
+      console.warn(
+        `Thumbnail raw payload for ${data.fileId}: rawType=${Object.prototype.toString.call(data.data)} byteLength=${bytes.byteLength} magicBytes=[${magic}]`
+      );
+
+      const blob = new Blob([bytes as BlobPart], { type: "image/jpeg" });
       pending.resolve(URL.createObjectURL(blob));
     });
   }
@@ -154,6 +243,42 @@ export class FileTransferManager {
         width,
         height,
       });
+    });
+  }
+
+  deleteFile(deviceId: string, fileId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingDeletes.delete(fileId);
+        reject(new Error("Delete timed out"));
+      }, TIMEOUTS.FILE_STREAM_TIMEOUT);
+
+      this.pendingDeletes.set(fileId, { resolve, reject, timeout });
+      this.socket.emit(SOCKET_EVENTS.FILE.DELETE, { deviceId, fileId });
+    });
+  }
+
+  renameFile(deviceId: string, fileId: string, newName: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingRenames.delete(fileId);
+        reject(new Error("Rename timed out"));
+      }, TIMEOUTS.FILE_STREAM_TIMEOUT);
+
+      this.pendingRenames.set(fileId, { resolve, reject, timeout });
+      this.socket.emit(SOCKET_EVENTS.FILE.RENAME, { deviceId, fileId, newName });
+    });
+  }
+
+  requestEdit(deviceId: string, fileId: string, options: EditOptions): Promise<FileItem> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingEdits.delete(fileId);
+        reject(new Error("Edit timed out"));
+      }, TIMEOUTS.FILE_STREAM_TIMEOUT);
+
+      this.pendingEdits.set(fileId, { resolve, reject, timeout });
+      this.socket.emit(SOCKET_EVENTS.FILE.EDIT, { deviceId, fileId, ...options });
     });
   }
 }

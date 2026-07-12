@@ -192,6 +192,24 @@ class SocketService {
       final request = ThumbnailRequestPayload.fromJson(map);
       await _fileStreamService?.handleThumbnailRequest(request);
     });
+
+    socket.on(SocketEvents.fileDelete, (data) async {
+      final map = Map<String, dynamic>.from(data as Map);
+      final request = DeleteRequestPayload.fromJson(map);
+      await _fileStreamService?.handleDeleteRequest(request);
+    });
+
+    socket.on(SocketEvents.fileRename, (data) async {
+      final map = Map<String, dynamic>.from(data as Map);
+      final request = RenameRequestPayload.fromJson(map);
+      await _fileStreamService?.handleRenameRequest(request);
+    });
+
+    socket.on(SocketEvents.fileEdit, (data) async {
+      final map = Map<String, dynamic>.from(data as Map);
+      final request = EditRequestPayload.fromJson(map);
+      await _fileStreamService?.handleEditRequest(request);
+    });
   }
 
   void dispose() {

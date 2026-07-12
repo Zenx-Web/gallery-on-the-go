@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'screens/status_screen.dart';
 import 'services/background_service.dart';
 import 'services/fcm_handler.dart';
+import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -37,13 +38,7 @@ class GalleryOnTheGoApp extends StatelessWidget {
     return MaterialApp(
       title: 'GalleryOnTheGo',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF6C63FF),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
+      theme: AppTheme.dark,
       home: const StatusScreen(),
     );
   }

@@ -78,6 +78,11 @@ export default function PhotoGrid({
                 alt={photo.name}
                 loading="lazy"
                 className="w-full h-full object-cover"
+                onError={() =>
+                  console.warn(
+                    `Thumbnail image failed to decode for ${photo.name} (${photo.id}): ${photo.thumbnailUrl}`
+                  )
+                }
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center bg-[var(--color-surface-glass)]">

@@ -37,6 +37,12 @@ class SocketEvents {
   static const String fileError = 'file:error';
   static const String fileThumbnailRequest = 'file:thumbnail-request';
   static const String fileThumbnailResponse = 'file:thumbnail-response';
+  static const String fileDelete = 'file:delete';
+  static const String fileDeleteResponse = 'file:delete-response';
+  static const String fileRename = 'file:rename';
+  static const String fileRenameResponse = 'file:rename-response';
+  static const String fileEdit = 'file:edit';
+  static const String fileEditResponse = 'file:edit-response';
 
   // Search events
   static const String searchQuery = 'search:query';

@@ -14,8 +14,13 @@ import {
   ZoomIn,
   ZoomOut,
   Info,
+  Trash2,
+  Pencil,
+  SlidersHorizontal,
+  RotateCw,
 } from "lucide-react";
 import { useState, useCallback, useEffect } from "react";
+import type { EditOptions } from "@/lib/fileTransfer";
 
 interface ImageViewerProps {
   isOpen: boolean;
@@ -25,6 +30,9 @@ interface ImageViewerProps {
   imageDate?: string;
   onClose: () => void;
   onDownload?: () => void;
+  onDelete?: () => void;
+  onRename?: (newName: string) => void;
+  onEdit?: (options: EditOptions) => void;
   onPrev?: () => void;
   onNext?: () => void;
   hasPrev?: boolean;
@@ -45,6 +53,9 @@ export default function ImageViewer({
   imageDate,
   onClose,
   onDownload,
+  onDelete,
+  onRename,
+  onEdit,
   onPrev,
   onNext,
   hasPrev = false,
@@ -52,6 +63,38 @@ export default function ImageViewer({
 }: ImageViewerProps) {
   const [zoom, setZoom] = useState(1);
   const [showInfo, setShowInfo] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [rotateDegrees, setRotateDegrees] = useState(0);
+  const [brightness, setBrightness] = useState(1);
+  const [contrast, setContrast] = useState(1);
+
+  const handleDelete = () => {
+    if (!onDelete) return;
+    if (window.confirm(`Delete "${imageName}"? It will be moved to the device's trash.`)) {
+      onDelete();
+    }
+  };
+
+  const handleRename = () => {
+    if (!onRename) return;
+    const next = window.prompt("Rename file", imageName);
+    if (next && next.trim() && next.trim() !== imageName) {
+      onRename(next.trim());
+    }
+  };
+
+  const applyEdit = () => {
+    if (!onEdit) return;
+    onEdit({
+      rotateDegrees: rotateDegrees || undefined,
+      brightness: brightness !== 1 ? brightness : undefined,
+      contrast: contrast !== 1 ? contrast : undefined,
+    });
+    setShowEdit(false);
+    setRotateDegrees(0);
+    setBrightness(1);
+    setContrast(1);
+  };
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -144,6 +187,33 @@ export default function ImageViewer({
               >
                 <Info className="w-4 h-4 text-white" />
               </button>
+              {onEdit && (
+                <button
+                  onClick={() => setShowEdit(!showEdit)}
+                  className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
+                  title="Edit"
+                >
+                  <SlidersHorizontal className="w-4 h-4 text-white" />
+                </button>
+              )}
+              {onRename && (
+                <button
+                  onClick={handleRename}
+                  className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
+                  title="Rename"
+                >
+                  <Pencil className="w-4 h-4 text-white" />
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  onClick={handleDelete}
+                  className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-red-500/20 transition-all"
+                  title="Delete"
+                >
+                  <Trash2 className="w-4 h-4 text-white" />
+                </button>
+              )}
               {onDownload && (
                 <button
                   onClick={onDownload}
@@ -203,6 +273,81 @@ export default function ImageViewer({
               <ChevronRight className="w-6 h-6 text-white" />
             </button>
           )}
+
+          {/* Edit Panel */}
+          <AnimatePresence>
+            {showEdit && onEdit && (
+              <motion.div
+                initial={{ x: -300, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: -300, opacity: 0 }}
+                transition={{ duration: 0.25 }}
+                className="absolute left-0 top-16 bottom-0 w-72 glass-strong p-6 overflow-y-auto z-10"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-sm font-semibold text-white mb-4">Edit</h3>
+                <div className="space-y-5">
+                  <div>
+                    <p className="text-[11px] text-white/40 uppercase tracking-wider mb-2">
+                      Rotate
+                    </p>
+                    <button
+                      onClick={() => setRotateDegrees((d) => (d + 90) % 360)}
+                      className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
+                    >
+                      <RotateCw className="w-4 h-4 text-white" />
+                    </button>
+                    <span className="ml-2 text-xs text-white/60">{rotateDegrees}°</span>
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <p className="text-[11px] text-white/40 uppercase tracking-wider">
+                        Brightness
+                      </p>
+                      <span className="text-xs text-white/60">{brightness.toFixed(2)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.5}
+                      max={1.5}
+                      step={0.05}
+                      value={brightness}
+                      onChange={(e) => setBrightness(parseFloat(e.target.value))}
+                      className="w-full"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <p className="text-[11px] text-white/40 uppercase tracking-wider">
+                        Contrast
+                      </p>
+                      <span className="text-xs text-white/60">{contrast.toFixed(2)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.5}
+                      max={1.5}
+                      step={0.05}
+                      value={contrast}
+                      onChange={(e) => setContrast(parseFloat(e.target.value))}
+                      className="w-full"
+                    />
+                  </div>
+                  <div className="flex gap-2 pt-2">
+                    <button onClick={applyEdit} className="btn-primary py-2 px-4 text-xs flex-1">
+                      Apply
+                    </button>
+                    <button
+                      onClick={() => setShowEdit(false)}
+                      className="glass-sm py-2 px-4 text-xs rounded-xl text-white/70 hover:text-white transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Info Panel */}
           <AnimatePresence>

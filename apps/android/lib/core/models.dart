@@ -143,6 +143,92 @@ class FileRequestPayload {
       );
 }
 
+class DeleteRequestPayload {
+  final String fileId;
+  final String deviceId;
+  final String clientSocketId;
+
+  DeleteRequestPayload({
+    required this.fileId,
+    required this.deviceId,
+    required this.clientSocketId,
+  });
+
+  factory DeleteRequestPayload.fromJson(Map<String, dynamic> json) =>
+      DeleteRequestPayload(
+        fileId: json['fileId'] as String,
+        deviceId: json['deviceId'] as String,
+        clientSocketId: json['_clientSocketId'] as String,
+      );
+}
+
+class RenameRequestPayload {
+  final String fileId;
+  final String deviceId;
+  final String newName;
+  final String clientSocketId;
+
+  RenameRequestPayload({
+    required this.fileId,
+    required this.deviceId,
+    required this.newName,
+    required this.clientSocketId,
+  });
+
+  factory RenameRequestPayload.fromJson(Map<String, dynamic> json) =>
+      RenameRequestPayload(
+        fileId: json['fileId'] as String,
+        deviceId: json['deviceId'] as String,
+        newName: json['newName'] as String,
+        clientSocketId: json['_clientSocketId'] as String,
+      );
+}
+
+/// Edit operations are applied in order: rotate, then crop, then
+/// brightness/contrast. All fields optional — omit an op to skip it.
+/// Crop coordinates are normalized (0.0-1.0) relative to the source image.
+/// brightness/contrast are multipliers where 1.0 means "unchanged" (matches
+/// the `image` package's `adjustColor` semantics directly).
+class EditRequestPayload {
+  final String fileId;
+  final String deviceId;
+  final int? rotateDegrees;
+  final double? cropX;
+  final double? cropY;
+  final double? cropWidth;
+  final double? cropHeight;
+  final double? brightness;
+  final double? contrast;
+  final String clientSocketId;
+
+  EditRequestPayload({
+    required this.fileId,
+    required this.deviceId,
+    this.rotateDegrees,
+    this.cropX,
+    this.cropY,
+    this.cropWidth,
+    this.cropHeight,
+    this.brightness,
+    this.contrast,
+    required this.clientSocketId,
+  });
+
+  factory EditRequestPayload.fromJson(Map<String, dynamic> json) =>
+      EditRequestPayload(
+        fileId: json['fileId'] as String,
+        deviceId: json['deviceId'] as String,
+        rotateDegrees: (json['rotateDegrees'] as num?)?.toInt(),
+        cropX: (json['cropX'] as num?)?.toDouble(),
+        cropY: (json['cropY'] as num?)?.toDouble(),
+        cropWidth: (json['cropWidth'] as num?)?.toDouble(),
+        cropHeight: (json['cropHeight'] as num?)?.toDouble(),
+        brightness: (json['brightness'] as num?)?.toDouble(),
+        contrast: (json['contrast'] as num?)?.toDouble(),
+        clientSocketId: json['_clientSocketId'] as String,
+      );
+}
+
 class ThumbnailRequestPayload {
   final String fileId;
   final String deviceId;

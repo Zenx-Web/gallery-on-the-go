@@ -28,6 +28,16 @@ class MediaService {
   // ─── Gallery ───
 
   Future<GalleryListResponse> listAlbums() async {
+    // The background service runs continuously (see socket_service.dart),
+    // so if the user grants full media access from system Settings while
+    // the app was already running, photo_manager's own MediaStore/
+    // permission-scope cache is never invalidated — every query keeps
+    // returning whatever subset was visible under the previous (often
+    // limited/partial) grant until the process restarts. Clearing the
+    // cache before every listing forces it to re-check current permission
+    // state and re-query MediaStore fresh, without requiring a restart.
+    await PhotoManager.clearFileCache();
+
     final paths = await PhotoManager.getAssetPathList(
       type: RequestType.common,
       onlyAll: false,
@@ -72,8 +82,13 @@ class MediaService {
     }
 
     final total = await album.assetCountAsync;
-    // photo_manager pages are 0-indexed; our wire protocol is 1-indexed.
-    final assets = await album.getAssetListPaged(page: page - 1, size: pageSize);
+    // getAssetListRange (absolute offsets) instead of getAssetListPaged
+    // (internal per-page cursor) — the cursor-based paging can re-query
+    // MediaStore per page and drift if it changes between calls, silently
+    // skipping assets across page boundaries. Range queries are stable
+    // against a single ordering. Our wire protocol is 1-indexed.
+    final start = (page - 1) * pageSize;
+    final assets = await album.getAssetListRange(start: start, end: start + pageSize);
 
     final files = <FileItem>[];
     for (final asset in assets) {
@@ -222,6 +237,23 @@ class MediaService {
   Future<AssetEntity?> resolveAsset(String fileId) async {
     return _assetCache[fileId];
   }
+
+  /// Registers an asset under `fileId` — used after delete/rename/edit
+  /// operations produce a new or updated [AssetEntity] that subsequent
+  /// requests need to resolve without waiting for the next full listing.
+  void cacheAsset(String fileId, AssetEntity asset) {
+    _assetCache[fileId] = asset;
+  }
+
+  /// Drops a stale cache entry — used after delete/rename so a lingering
+  /// reference to the old asset can't be resolved anymore.
+  void invalidateAsset(String fileId) {
+    _assetCache.remove(fileId);
+  }
+
+  /// Public wrapper around [_toFileItem] — used by file_stream_service to
+  /// build the updated FileItem returned in rename/edit responses.
+  Future<FileItem> toFileItem(AssetEntity asset) => _toFileItem(asset);
 
   Future<FileItem> _toFileItem(AssetEntity asset) async {
     final file = await asset.file;

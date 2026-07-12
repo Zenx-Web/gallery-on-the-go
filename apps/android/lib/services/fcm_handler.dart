@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -26,18 +27,56 @@ Future<void> initFcmHandler({
 
     final messaging = FirebaseMessaging.instance;
 
-    // Request permission (no-op on Android 12 and below; needed for 13+).
-    await messaging.requestPermission(alert: false, badge: false, sound: false);
+    // On Android, notification permission (POST_NOTIFICATIONS, Android 13+)
+    // is already requested from the UI isolate in status_screen.dart, where
+    // an Activity is actually attached. Calling requestPermission() here
+    // throws "Unable to detect current Android Activity" every time, since
+    // this runs in the headless background-service isolate — and, left
+    // unguarded, that exception used to abort this entire function before
+    // getToken()/token registration ever ran. Only call it on iOS, where
+    // it's the real permission-request path, and isolate it so a failure
+    // there can never block FCM token registration below.
+    if (!Platform.isAndroid) {
+      try {
+        await messaging.requestPermission(alert: false, badge: false, sound: false);
+      } catch (e) {
+        print('[FCM] requestPermission failed (non-fatal): $e');
+      }
+    }
 
-    // Upload current token.
-    final token = await messaging.getToken();
+    // Upload current token — retried with backoff since this runs once per
+    // service start and a transient failure here (cold Play Services, flaky
+    // network right after boot) would otherwise leave the device silently
+    // unreachable via FCM until the next service restart.
+    String? token;
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        token = await messaging.getToken();
+        if (token != null) break;
+      } catch (e) {
+        print('[FCM] getToken attempt $attempt failed: $e');
+      }
+      if (attempt < 3) await Future.delayed(Duration(seconds: attempt * 3));
+    }
+
     if (token != null) {
-      await _registerFcmToken(
+      var registered = await _registerFcmToken(
         serverUrl: serverUrl,
         deviceId: deviceId,
         deviceToken: deviceToken,
         fcmToken: token,
       );
+      for (var attempt = 1; attempt < 3 && !registered; attempt++) {
+        await Future.delayed(Duration(seconds: attempt * 3));
+        registered = await _registerFcmToken(
+          serverUrl: serverUrl,
+          deviceId: deviceId,
+          deviceToken: deviceToken,
+          fcmToken: token,
+        );
+      }
+    } else {
+      print('[FCM] Could not obtain an FCM token after retries');
     }
 
     // Keep token fresh — FCM rotates it occasionally.
@@ -84,7 +123,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 }
 
-Future<void> _registerFcmToken({
+Future<bool> _registerFcmToken({
   required String serverUrl,
   required String deviceId,
   required String deviceToken,
@@ -102,10 +141,12 @@ Future<void> _registerFcmToken({
     );
     if (response.statusCode == 200) {
       print('[FCM] Token registered successfully');
-    } else {
-      print('[FCM] Token registration failed (${response.statusCode}): ${response.body}');
+      return true;
     }
+    print('[FCM] Token registration failed (${response.statusCode}): ${response.body}');
+    return false;
   } catch (e) {
     print('[FCM] Token registration error: $e');
+    return false;
   }
 }

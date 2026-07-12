@@ -64,6 +64,12 @@ export const SOCKET_EVENTS = {
     ERROR: 'file:error',
     THUMBNAIL_REQUEST: 'file:thumbnail-request',
     THUMBNAIL_RESPONSE: 'file:thumbnail-response',
+    DELETE: 'file:delete',
+    DELETE_RESPONSE: 'file:delete-response',
+    RENAME: 'file:rename',
+    RENAME_RESPONSE: 'file:rename-response',
+    EDIT: 'file:edit',
+    EDIT_RESPONSE: 'file:edit-response',
   },
 
   // Search events

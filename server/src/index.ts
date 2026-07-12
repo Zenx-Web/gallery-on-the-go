@@ -30,19 +30,13 @@ app.use(cors({
 // ─── Rate Limiting ───
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
+  max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests, please try again later.' },
 });
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10, // Stricter limit for auth endpoints
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { success: false, error: 'Too many login attempts, please try again later.' },
-});
+
 
 // ─── Body Parsing ───
 app.use(express.json({ limit: '1mb' }));
@@ -61,7 +55,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 // ─── API Routes ───
-app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/devices', apiLimiter, deviceRoutes);
 app.use('/api/settings', apiLimiter, settingsRoutes);
 

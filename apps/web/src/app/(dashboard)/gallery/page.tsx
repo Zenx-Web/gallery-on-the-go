@@ -8,8 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import JSZip from "jszip";
-import { downloadZip } from "client-zip";
-import { SOCKET_EVENTS, PAGINATION } from "@gallery/shared";
+import { SOCKET_EVENTS } from "@gallery/shared";
 import type { FileItem, GalleryAlbum } from "@gallery/shared";
 import TopBar from "@/components/TopBar";
 import FolderGrid, { FolderItem } from "@/components/FolderGrid";
@@ -19,11 +18,22 @@ import EmptyState from "@/components/EmptyState";
 import { useDevices } from "@/contexts/DeviceContext";
 import { getClientSocket } from "@/lib/socket";
 import { getFileTransferManager, downloadBlob } from "@/lib/fileTransfer";
+import type { EditOptions } from "@/lib/fileTransfer";
 import { runWithConcurrency } from "@/lib/concurrency";
 
 const THUMBNAIL_CONCURRENCY = 5;
 const ZIP_DOWNLOAD_CONCURRENCY = 4;
 const ZIP_FILE_RETRIES = 2;
+// Files per ZIP chunk — each chunk is downloaded, finalized, and saved to
+// disk independently, so a mid-download disconnect only loses the chunk
+// currently in flight. Also bounds peak memory to one chunk's worth of
+// files instead of the whole (possibly thousands-of-files) folder.
+const ZIP_CHUNK_SIZE = 25;
+// Incremental page size for on-screen folder browsing — kept modest so
+// opening a folder with thousands of files feels instant; more pages load
+// automatically as the user scrolls (see the IntersectionObserver sentinel
+// below), instead of blocking on the whole folder up front.
+const FOLDER_PAGE_SIZE = 40;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,6 +79,9 @@ export default function GalleryPage() {
   const [currentFolder, setCurrentFolder] = useState<FolderItem | null>(null);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
+  const [filesLoadingMore, setFilesLoadingMore] = useState(false);
+  const [filesHasMore, setFilesHasMore] = useState(false);
+  const [filesPage, setFilesPage] = useState(1);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
@@ -92,6 +105,7 @@ export default function GalleryPage() {
 
   const cancelledRef = useRef<boolean>(false);
   const thumbnailUrlsRef = useRef<string[]>([]);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
 
   // ─── Load albums when the active device changes ───
   useEffect(() => {
@@ -111,35 +125,140 @@ export default function GalleryPage() {
     };
   }, [selectedDevice]);
 
+  // Fetches a single page of a folder's contents — used for incremental
+  // on-screen browsing (openFolder/loadMoreFiles below).
+  const fetchFolderPage = (
+    folder: FolderItem,
+    page: number,
+    pageSize: number
+  ): Promise<{ files: FileItem[]; hasMore: boolean }> => {
+    const socket = getClientSocket();
+    return new Promise((resolve, reject) => {
+      const onAlbumFiles = (data: { files: FileItem[]; hasMore: boolean }) => {
+        socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
+        resolve({ files: sortByNewest(data.files), hasMore: data.hasMore });
+      };
+
+      socket.on(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
+      socket.emit(SOCKET_EVENTS.GALLERY.ALBUM_FILES, {
+        deviceId: selectedDevice!.id,
+        albumId: folder.id,
+        page,
+        pageSize,
+      });
+
+      setTimeout(() => {
+        socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
+        reject(new Error("Failed to retrieve folder contents (timeout)"));
+      }, 30000);
+    });
+  };
+
+  // Fetches an ENTIRE folder in one shot — only used for ZIP downloads,
+  // where the whole file list is needed up front regardless of scroll
+  // position. On-screen browsing uses fetchFolderPage + loadMoreFiles
+  // instead, since blocking on a full 9000-item folder before showing
+  // anything is far too slow for interactive browsing.
+  const fetchFolderFileList = (folder: FolderItem): Promise<FileItem[]> => {
+    const socket = getClientSocket();
+    return new Promise<FileItem[]>((resolve, reject) => {
+      const onAlbumFiles = (data: { files: FileItem[] }) => {
+        socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
+        resolve(sortByNewest(data.files));
+      };
+
+      socket.on(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
+
+      socket.emit(SOCKET_EVENTS.GALLERY.ALBUM_FILES, {
+        deviceId: selectedDevice!.id,
+        albumId: folder.id,
+        page: 1,
+        pageSize: Math.max(folder.fileCount || 50, 1000),
+      });
+
+      // Scale the timeout with folder size — enumerating a large album can
+      // take a while on the device side, and 15s was too tight for those.
+      const listingTimeout = Math.min(Math.max(30000, (folder.fileCount || 0) * 50), 60000);
+      setTimeout(() => {
+        socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
+        reject(new Error("Failed to retrieve folder contents (timeout)"));
+      }, listingTimeout);
+    });
+  };
+
   // ─── Load files for the open folder ───
+  // Loads just the first page immediately — more pages load automatically
+  // as the user scrolls near the bottom (loadMoreFiles).
   const openFolder = useCallback(
     (folder: FolderItem) => {
       if (!selectedDevice) return;
       setCurrentFolder(folder);
       setFiles([]);
+      setFilesPage(1);
+      setFilesHasMore(false);
       setFilesLoading(true);
 
-      const socket = getClientSocket();
-      const onAlbumFiles = (data: { files: FileItem[] }) => {
-        setFiles(sortByNewest(data.files));
-        setFilesLoading(false);
-        socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
-      };
-      socket.on(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
-      socket.emit(SOCKET_EVENTS.GALLERY.ALBUM_FILES, {
-        deviceId: selectedDevice.id,
-        albumId: folder.id,
-        page: PAGINATION.DEFAULT_PAGE,
-        pageSize: PAGINATION.DEFAULT_PAGE_SIZE,
-      });
+      fetchFolderPage(folder, 1, FOLDER_PAGE_SIZE)
+        .then(({ files: list, hasMore }) => {
+          setFiles(list);
+          setFilesHasMore(hasMore);
+        })
+        .catch((err) => {
+          console.error("Failed to load folder contents:", err);
+          setFiles([]);
+        })
+        .finally(() => setFilesLoading(false));
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [selectedDevice]
   );
+
+  const loadMoreFiles = useCallback(() => {
+    if (!selectedDevice || !currentFolder || filesLoadingMore || !filesHasMore) return;
+    const nextPage = filesPage + 1;
+    setFilesLoadingMore(true);
+
+    fetchFolderPage(currentFolder, nextPage, FOLDER_PAGE_SIZE)
+      .then(({ files: list, hasMore }) => {
+        // Defensive dedup — guards against any duplicate items a paged
+        // device-side query might still return across page boundaries.
+        setFiles((prev) => {
+          const seen = new Set(prev.map((f) => f.id));
+          return [...prev, ...list.filter((f) => !seen.has(f.id))];
+        });
+        setFilesHasMore(hasMore);
+        setFilesPage(nextPage);
+      })
+      .catch((err) => {
+        console.error("Failed to load more folder contents:", err);
+        setFilesHasMore(false);
+      })
+      .finally(() => setFilesLoadingMore(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDevice, currentFolder, filesPage, filesLoadingMore, filesHasMore]);
 
   const handleBack = () => {
     setCurrentFolder(null);
     setFiles([]);
+    setFilesPage(1);
+    setFilesHasMore(false);
   };
+
+  // ─── Infinite scroll: load the next folder page when the sentinel
+  // (rendered right after the grid) scrolls into view ───
+  useEffect(() => {
+    const el = loadMoreSentinelRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) loadMoreFiles();
+      },
+      { rootMargin: "600px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMoreFiles, files]);
 
   // ─── Lazily resolve thumbnails for the currently listed files ───
   useEffect(() => {
@@ -229,238 +348,166 @@ export default function GalleryPage() {
     }
   };
 
-  const fetchFolderFileList = (folder: FolderItem): Promise<FileItem[]> => {
+  const handleDelete = async (photo: PhotoItem) => {
+    if (!selectedDevice) return;
     const socket = getClientSocket();
-    return new Promise<FileItem[]>((resolve, reject) => {
-      const onAlbumFiles = (data: { files: FileItem[] }) => {
-        socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
-        resolve(sortByNewest(data.files));
-      };
-
-      socket.on(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
-
-      socket.emit(SOCKET_EVENTS.GALLERY.ALBUM_FILES, {
-        deviceId: selectedDevice!.id,
-        albumId: folder.id,
-        page: 1,
-        pageSize: Math.max(folder.fileCount || 50, 1000),
-      });
-
-      // Scale the timeout with folder size — enumerating a large album can
-      // take a while on the device side, and 15s was too tight for those.
-      const listingTimeout = Math.min(Math.max(30000, (folder.fileCount || 0) * 50), 60000);
-      setTimeout(() => {
-        socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
-        reject(new Error("Failed to retrieve folder contents (timeout)"));
-      }, listingTimeout);
-    });
+    const manager = getFileTransferManager(socket);
+    try {
+      await manager.deleteFile(selectedDevice.id, photo.id);
+      setFiles((prev) => prev.filter((f) => f.id !== photo.id));
+      if (viewerOpen && photos[viewerIndex]?.id === photo.id) {
+        setViewerOpen(false);
+      }
+    } catch (err) {
+      console.error("Delete failed:", err);
+      alert((err as Error).message || "Failed to delete file.");
+    }
   };
 
-  // Downloads files with bounded concurrency and yields each successful
-  // result as soon as it's ready, instead of collecting them all first — lets
-  // a streaming ZIP writer emit entries without holding the whole folder in
-  // memory at once.
-  async function* streamZipEntries(
-    filesList: FileItem[],
-    manager: ReturnType<typeof getFileTransferManager>,
-    deviceId: string,
-    onProgress: (settled: number, total: number) => void
-  ): AsyncGenerator<{ name: string; input: Blob }> {
-    const total = filesList.length;
-    const ready: { name: string; input: Blob }[] = [];
-    let nextIndex = 0;
-    let settledCount = 0;
-    let activeWorkers = 0;
-    let wake: (() => void) | null = null;
-
-    const notify = () => {
-      if (wake) {
-        const w = wake;
-        wake = null;
-        w();
-      }
-    };
-
-    async function worker() {
-      activeWorkers++;
-      try {
-        while (nextIndex < filesList.length) {
-          if (cancelledRef.current) return;
-          const file = filesList[nextIndex++];
-
-          let result: { blob: Blob; fileName: string } | null = null;
-          for (let attempt = 0; attempt <= ZIP_FILE_RETRIES; attempt++) {
-            if (cancelledRef.current) return;
-            try {
-              const { blob, fileName } = await manager.requestFile(deviceId, file.id);
-              result = { blob, fileName: fileName || file.name || `photo_${file.id}` };
-              break;
-            } catch (fileErr) {
-              if (attempt < ZIP_FILE_RETRIES) await sleep(500 * (attempt + 1));
-              else console.warn(`Failed to download file ${file.name || file.id} after retries:`, fileErr);
-            }
-          }
-
-          settledCount++;
-          onProgress(settledCount, total);
-          if (result) ready.push({ name: result.fileName, input: result.blob });
-          notify();
-        }
-      } finally {
-        activeWorkers--;
-        notify();
-      }
+  const handleRename = async (photo: PhotoItem, newName: string) => {
+    if (!selectedDevice) return;
+    const socket = getClientSocket();
+    const manager = getFileTransferManager(socket);
+    try {
+      const finalName = await manager.renameFile(selectedDevice.id, photo.id, newName);
+      setFiles((prev) =>
+        prev.map((f) => (f.id === photo.id ? { ...f, name: finalName } : f))
+      );
+    } catch (err) {
+      console.error("Rename failed:", err);
+      alert((err as Error).message || "Failed to rename file.");
     }
+  };
 
-    const workers = Array.from({ length: Math.min(ZIP_DOWNLOAD_CONCURRENCY, filesList.length) }, worker);
-
-    while (true) {
-      if (ready.length > 0) {
-        yield ready.shift()!;
-        continue;
-      }
-      if (cancelledRef.current || (activeWorkers === 0 && nextIndex >= filesList.length)) {
-        break;
-      }
-      await new Promise<void>((resolve) => {
-        wake = resolve;
+  const handleEdit = async (photo: PhotoItem, options: EditOptions) => {
+    if (!selectedDevice) return;
+    const socket = getClientSocket();
+    const manager = getFileTransferManager(socket);
+    try {
+      const newFile = await manager.requestEdit(selectedDevice.id, photo.id, options);
+      // Edits save as a new asset on Android (scoped-storage limitation —
+      // see file_stream_service.dart) — swap the old entry for the new one.
+      setFiles((prev) => prev.map((f) => (f.id === photo.id ? newFile : f)));
+      setThumbnails((prev) => {
+        const { [photo.id]: _removed, ...rest } = prev;
+        return rest;
       });
+      if (viewerOpen && photos[viewerIndex]?.id === photo.id) {
+        // Fetch directly by the new id rather than re-running
+        // loadViewerImage(viewerIndex) — the `files` array in this closure
+        // is still the pre-edit snapshot until the next render.
+        setViewerUrl(null);
+        try {
+          const { blob } = await manager.requestFile(selectedDevice.id, newFile.id);
+          const url = URL.createObjectURL(blob);
+          thumbnailUrlsRef.current.push(url);
+          setViewerUrl(url);
+        } catch {
+          // Leave viewer showing the thumbnail-quality fallback.
+        }
+      }
+    } catch (err) {
+      console.error("Edit failed:", err);
+      alert((err as Error).message || "Failed to save edit.");
     }
+  };
 
-    await Promise.all(workers);
+  function chunkArray<T>(list: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < list.length; i += size) {
+      chunks.push(list.slice(i, i + size));
+    }
+    return chunks;
   }
 
-  const downloadFolderViaJSZip = async (
-    folder: FolderItem,
-    filesList: FileItem[],
-    manager: ReturnType<typeof getFileTransferManager>
-  ) => {
+  // Downloads one chunk's files (bounded concurrency + retries) into its own
+  // JSZip and returns the built blob plus how many files actually made it in.
+  const downloadChunkToZip = async (
+    chunkFiles: FileItem[],
+    manager: ReturnType<typeof getFileTransferManager>,
+    onFileSettled: () => void
+  ): Promise<{ blob: Blob; downloadedCount: number }> => {
     const zip = new JSZip();
     let downloadedCount = 0;
-    const totalFiles = filesList.length;
 
-    const saveZip = async (isPartial: boolean) => {
-      const fileCountInZip = Object.keys(zip.files).length;
-      if (fileCountInZip > 0) {
-        setZipState((prev) => ({
-          ...prev,
-          percentage: 100,
-          status: isPartial
-            ? `Creating partial ZIP archive (${fileCountInZip} of ${totalFiles} files)...`
-            : "Creating ZIP archive...",
-        }));
+    await runWithConcurrency(chunkFiles, ZIP_DOWNLOAD_CONCURRENCY, async (file) => {
+      if (cancelledRef.current) return;
 
+      let lastErr: unknown;
+      for (let attempt = 0; attempt <= ZIP_FILE_RETRIES; attempt++) {
+        if (cancelledRef.current) return;
         try {
-          const zipBlob = await zip.generateAsync({ type: "blob" });
-          const suffix = isPartial ? "_partial.zip" : "_gallery.zip";
-          downloadBlob(zipBlob, `${folder.name.replace(/\s+/g, "_")}${suffix}`);
-        } catch (genErr) {
-          console.error("Failed to generate ZIP blob:", genErr);
+          const { blob, fileName } = await manager.requestFile(selectedDevice!.id, file.id);
+          if (cancelledRef.current) return;
+          zip.file(fileName || file.name || `photo_${file.id}`, blob);
+          downloadedCount++;
+          lastErr = undefined;
+          break;
+        } catch (fileErr) {
+          lastErr = fileErr;
+          if (attempt < ZIP_FILE_RETRIES) await sleep(500 * (attempt + 1));
         }
       }
-    };
+      if (lastErr) {
+        console.warn(`Failed to download file ${file.name || file.id} after retries:`, lastErr);
+      }
+      onFileSettled();
+    });
 
-    try {
-      let settledCount = 0;
-      await runWithConcurrency(filesList, ZIP_DOWNLOAD_CONCURRENCY, async (file) => {
-        if (cancelledRef.current) return;
+    const blob = await zip.generateAsync({ type: "blob" });
+    return { blob, downloadedCount };
+  };
 
-        let lastErr: unknown;
-        for (let attempt = 0; attempt <= ZIP_FILE_RETRIES; attempt++) {
-          if (cancelledRef.current) return;
-          try {
-            const { blob, fileName } = await manager.requestFile(selectedDevice!.id, file.id);
-            if (cancelledRef.current) return;
-            zip.file(fileName || file.name || `photo_${file.id}`, blob);
-            downloadedCount++;
-            lastErr = undefined;
-            break;
-          } catch (fileErr) {
-            lastErr = fileErr;
-            if (attempt < ZIP_FILE_RETRIES) await sleep(500 * (attempt + 1));
-          }
-        }
-        if (lastErr) {
-          console.warn(`Failed to download file ${file.name || file.id} after retries:`, lastErr);
-        }
+  // Downloads a folder as a series of independently-valid ZIP chunk files
+  // instead of one continuous archive. Each chunk is fully finalized and
+  // saved to disk as soon as it completes, so a mid-download disconnect (or
+  // a manual cancel) only loses the chunk currently in flight — every prior
+  // chunk is already a complete, openable ZIP on disk. This also keeps peak
+  // memory bounded to one chunk's worth of files instead of the whole folder.
+  const downloadFolderInChunks = async (folder: FolderItem, filesList: FileItem[]) => {
+    const socket = getClientSocket();
+    const manager = getFileTransferManager(socket);
+    const chunks = chunkArray(filesList, ZIP_CHUNK_SIZE);
+    const totalFiles = filesList.length;
+    const totalChunks = chunks.length;
+    const baseName = folder.name.replace(/\s+/g, "_");
+    let settledCount = 0;
+    let anyChunkSaved = false;
 
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      if (cancelledRef.current) break;
+
+      const chunk = chunks[chunkIndex];
+      const chunkLabel = totalChunks > 1 ? ` (part ${chunkIndex + 1} of ${totalChunks})` : "";
+
+      const { blob, downloadedCount } = await downloadChunkToZip(chunk, manager, () => {
         settledCount++;
         setZipState({
           active: true,
-          status: `Downloading files (${settledCount} of ${totalFiles})...`,
+          status: `Downloading files${chunkLabel} — ${settledCount} of ${totalFiles}...`,
           current: settledCount,
           total: totalFiles,
           percentage: Math.round((settledCount / totalFiles) * 100),
         });
       });
 
-      if (cancelledRef.current) {
-        await saveZip(true);
-      } else {
-        await saveZip(downloadedCount < totalFiles);
+      if (downloadedCount > 0) {
+        const isPartialChunk = downloadedCount < chunk.length;
+        const suffix = totalChunks > 1 ? `_part${chunkIndex + 1}of${totalChunks}` : "";
+        const name = `${baseName}${suffix}${isPartialChunk ? "_partial" : ""}.zip`;
+        downloadBlob(blob, name);
+        anyChunkSaved = true;
       }
-    } catch (err) {
-      if (cancelledRef.current) {
-        await saveZip(true);
-      } else {
-        const fileCountInZip = Object.keys(zip.files).length;
-        if (fileCountInZip > 0) {
-          console.error("ZIP download interrupted by error. Saving successfully downloaded files:", err);
-          await saveZip(true);
-        } else {
-          throw err;
-        }
-      }
-    }
-  };
 
-  // Streams the ZIP directly to disk via the File System Access API so peak
-  // memory stays bounded to a handful of in-flight files (ZIP_DOWNLOAD_CONCURRENCY)
-  // instead of the whole folder — avoids the OOM risk of buffering every file
-  // in memory before building one giant blob (see downloadFolderViaJSZip).
-  const downloadFolderViaStream = async (
-    folder: FolderItem,
-    filesList: FileItem[],
-    manager: ReturnType<typeof getFileTransferManager>
-  ) => {
-    const totalFiles = filesList.length;
-    const showSaveFilePicker = (window as unknown as {
-      showSaveFilePicker?: (opts: unknown) => Promise<FileSystemFileHandle>;
-    }).showSaveFilePicker!;
-
-    const handle = await showSaveFilePicker({
-      suggestedName: `${folder.name.replace(/\s+/g, "_")}_gallery.zip`,
-      types: [{ description: "ZIP archive", accept: { "application/zip": [".zip"] } }],
-    });
-    const writable = await (handle as unknown as {
-      createWritable: () => Promise<WritableStream<Uint8Array>>;
-    }).createWritable();
-
-    let settledCount = 0;
-    const entries = streamZipEntries(filesList, manager, selectedDevice!.id, (settled, total) => {
-      settledCount = settled;
-      setZipState({
-        active: true,
-        status: `Downloading files (${settled} of ${total})...`,
-        current: settled,
-        total,
-        percentage: Math.round((settled / total) * 100),
-      });
-    });
-
-    const response = downloadZip(entries);
-    try {
-      await response.body!.pipeTo(writable);
-    } catch (err) {
-      if (cancelledRef.current) {
-        setZipState((prev) => ({ ...prev, status: "Download cancelled. Removing partial file..." }));
-      } else {
-        throw err;
-      }
+      // A chunk that came back partial (device dropped mid-chunk) means
+      // there's no point starting the next one — stop here rather than
+      // grinding through remaining chunks that will just time out file by
+      // file against a device that's already gone.
+      if (downloadedCount < chunk.length) break;
     }
 
-    if (cancelledRef.current) {
-      console.warn(`ZIP download cancelled after ${settledCount} of ${totalFiles} files.`);
+    if (!anyChunkSaved) {
+      throw new Error("Could not download any files from this folder.");
     }
   };
 
@@ -476,8 +523,17 @@ export default function GalleryPage() {
     });
     cancelledRef.current = false;
 
-    const socket = getClientSocket();
-    const manager = getFileTransferManager(socket);
+    // Treat the device going offline mid-download exactly like a manual
+    // cancel — reuses all the existing "save what we have" handling below
+    // instead of waiting on each in-flight file's own 2-minute timeout.
+    const statusSocket = getClientSocket();
+    const onDeviceStatusChange = (data: { deviceId: string; status: string }) => {
+      if (data.deviceId === selectedDevice.id && data.status === "offline") {
+        cancelledRef.current = true;
+        setZipState((prev) => ({ ...prev, status: "Device disconnected — saving what was downloaded..." }));
+      }
+    };
+    statusSocket.on(SOCKET_EVENTS.DEVICE.STATUS_CHANGE, onDeviceStatusChange);
 
     try {
       const filesList = await fetchFolderFileList(folder);
@@ -497,19 +553,12 @@ export default function GalleryPage() {
         status: `Preparing to download ${filesList.length} files...`,
       }));
 
-      const canStream = typeof window !== "undefined" && "showSaveFilePicker" in window;
-      if (canStream) {
-        await downloadFolderViaStream(folder, filesList, manager);
-      } else {
-        await downloadFolderViaJSZip(folder, filesList, manager);
-      }
+      await downloadFolderInChunks(folder, filesList);
     } catch (err) {
-      // showSaveFilePicker throws AbortError if the user dismisses the save dialog.
-      if ((err as { name?: string }).name !== "AbortError") {
-        console.error("ZIP download failed:", err);
-        alert((err as Error).message || "An error occurred while creating the ZIP archive.");
-      }
+      console.error("ZIP download failed:", err);
+      alert((err as Error).message || "An error occurred while creating the ZIP archive.");
     } finally {
+      statusSocket.off(SOCKET_EVENTS.DEVICE.STATUS_CHANGE, onDeviceStatusChange);
       setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
     }
   };
@@ -659,7 +708,17 @@ export default function GalleryPage() {
                   <div className="w-6 h-6 border-2 border-[var(--color-accent-primary)] border-t-transparent rounded-full animate-spin" />
                 </div>
               ) : (
-                <PhotoGrid photos={photos} onPhotoClick={openViewer} onDownload={handleDownload} />
+                <>
+                  <PhotoGrid photos={photos} onPhotoClick={openViewer} onDownload={handleDownload} />
+                  {/* Sentinel — loads the next page automatically once it scrolls
+                      into view, instead of fetching the whole (possibly
+                      thousands-of-files) folder up front. */}
+                  {filesHasMore && (
+                    <div ref={loadMoreSentinelRef} className="flex items-center justify-center py-8">
+                      <div className="w-5 h-5 border-2 border-[var(--color-accent-primary)] border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  )}
+                </>
               )}
             </motion.div>
           )}
@@ -678,6 +737,18 @@ export default function GalleryPage() {
           onDownload={() => {
             const photo = photos[viewerIndex];
             if (photo) handleDownload(photo);
+          }}
+          onDelete={() => {
+            const photo = photos[viewerIndex];
+            if (photo) handleDelete(photo);
+          }}
+          onRename={(newName) => {
+            const photo = photos[viewerIndex];
+            if (photo) handleRename(photo, newName);
+          }}
+          onEdit={(options) => {
+            const photo = photos[viewerIndex];
+            if (photo) handleEdit(photo, options);
           }}
           onPrev={() => navigateViewer(-1)}
           onNext={() => navigateViewer(1)}

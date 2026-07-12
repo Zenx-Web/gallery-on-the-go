@@ -167,6 +167,18 @@ function handleDeviceConnection(socket: Socket) {
     relayToClient(data._clientSocketId, SOCKET_EVENTS.FILE.THUMBNAIL_RESPONSE, data);
   });
 
+  socket.on(SOCKET_EVENTS.FILE.DELETE_RESPONSE, (data: any) => {
+    relayToClient(data._clientSocketId, SOCKET_EVENTS.FILE.DELETE_RESPONSE, data);
+  });
+
+  socket.on(SOCKET_EVENTS.FILE.RENAME_RESPONSE, (data: any) => {
+    relayToClient(data._clientSocketId, SOCKET_EVENTS.FILE.RENAME_RESPONSE, data);
+  });
+
+  socket.on(SOCKET_EVENTS.FILE.EDIT_RESPONSE, (data: any) => {
+    relayToClient(data._clientSocketId, SOCKET_EVENTS.FILE.EDIT_RESPONSE, data);
+  });
+
   // ─── Search responses ───
   socket.on(SOCKET_EVENTS.SEARCH.RESULTS, (data: any) => {
     relayToClient(data._clientSocketId, SOCKET_EVENTS.SEARCH.RESULTS, data);
@@ -232,6 +244,27 @@ function handleClientConnection(socket: Socket) {
 
   socket.on(SOCKET_EVENTS.FILE.THUMBNAIL_REQUEST, (data: { deviceId: string; fileId: string }) => {
     relayToDevice(data.deviceId, SOCKET_EVENTS.FILE.THUMBNAIL_REQUEST, {
+      ...data,
+      _clientSocketId: socket.id,
+    });
+  });
+
+  socket.on(SOCKET_EVENTS.FILE.DELETE, (data: { deviceId: string; fileId: string }) => {
+    relayToDevice(data.deviceId, SOCKET_EVENTS.FILE.DELETE, {
+      ...data,
+      _clientSocketId: socket.id,
+    });
+  });
+
+  socket.on(SOCKET_EVENTS.FILE.RENAME, (data: { deviceId: string; fileId: string; newName: string }) => {
+    relayToDevice(data.deviceId, SOCKET_EVENTS.FILE.RENAME, {
+      ...data,
+      _clientSocketId: socket.id,
+    });
+  });
+
+  socket.on(SOCKET_EVENTS.FILE.EDIT, (data: { deviceId: string; fileId: string }) => {
+    relayToDevice(data.deviceId, SOCKET_EVENTS.FILE.EDIT, {
       ...data,
       _clientSocketId: socket.id,
     });

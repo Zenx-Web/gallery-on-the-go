@@ -3,9 +3,13 @@ package com.zenxorg.gallery_on_the_go
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Build
 
 class GalleryApplication : Application() {
+    private var wifiLock: WifiManager.WifiLock? = null
+
     override fun onCreate() {
         super.onCreate()
 
@@ -22,6 +26,20 @@ class GalleryApplication : Application() {
             )
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
+        }
+
+        // The background service's own PARTIAL_WAKE_LOCK keeps the CPU
+        // running on screen-off, but does nothing for the WiFi radio —
+        // Android drops WiFi into power-save mode on lock, which was
+        // silently starving the persistent relay socket's keep-alives.
+        // Held for the whole process lifetime, mirroring that wake lock.
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        wifiLock = wifiManager?.createWifiLock(
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+            "gallery:relay-wifi-lock",
+        )?.apply {
+            setReferenceCounted(false)
+            acquire()
         }
     }
 }

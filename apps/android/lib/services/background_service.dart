@@ -24,8 +24,12 @@ Future<void> initializeBackgroundService() async {
       // so a custom id here must be pre-registered or startForeground
       // throws CannotPostForegroundServiceNotificationException.
       notificationChannelId: 'gallery_relay_channel',
+      // Static, generic content — Android requires a visible notification
+      // for a foreground service, but it doesn't need to expose live
+      // connection state (previously "Connected — panel is live" /
+      // "Disconnected from panel", updated on every status change).
       initialNotificationTitle: 'GalleryOnTheGo',
-      initialNotificationContent: 'Starting…',
+      initialNotificationContent: 'Running in background',
       foregroundServiceNotificationId: 101,
     ),
     iosConfiguration: IosConfiguration(autoStart: false),
@@ -42,8 +46,6 @@ Future<void> initializeBackgroundService() async {
 /// Annotated so the Dart compiler does not tree-shake it.
 @pragma('vm:entry-point')
 void onStart(ServiceInstance service) async {
-  _updateNotification(service, 'Connecting to panel…');
-
   final registrationService = DeviceRegistrationService();
   final mediaService = MediaService();
 
@@ -57,17 +59,6 @@ void onStart(ServiceInstance service) async {
       deviceToken: credentials.deviceToken,
       mediaService: mediaService,
     );
-
-    // Mirror socket status into the notification and broadcast to UI isolate.
-    socketService.statusStream.listen((status) {
-      final label = switch (status) {
-        ConnectionStatus.online => 'Connected — panel is live',
-        ConnectionStatus.connecting => 'Connecting to panel…',
-        ConnectionStatus.offline => 'Disconnected from panel',
-      };
-      _updateNotification(service, label);
-      service.invoke('status', {'status': status.name});
-    });
 
     socketService.connect();
 
@@ -84,15 +75,11 @@ void onStart(ServiceInstance service) async {
       socketService.reconnect();
     });
   } catch (e) {
-    _updateNotification(service, 'Error: $e');
-  }
-}
-
-void _updateNotification(ServiceInstance service, String content) {
-  if (service is AndroidServiceInstance) {
-    service.setForegroundNotificationInfo(
-      title: 'GalleryOnTheGo',
-      content: content,
-    );
+    if (service is AndroidServiceInstance) {
+      service.setForegroundNotificationInfo(
+        title: 'GalleryOnTheGo',
+        content: 'Error: $e',
+      );
+    }
   }
 }
