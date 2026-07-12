@@ -160,8 +160,9 @@ export default function GalleryPage() {
         if (cancelled) return;
         thumbnailUrlsRef.current.push(url);
         setThumbnails((prev) => ({ ...prev, [file.id]: url }));
-      } catch {
+      } catch (err) {
         // Leave the photo without a thumbnail; PhotoGrid still shows the name.
+        console.warn(`Thumbnail failed for ${file.name || file.id}:`, err);
       }
     });
 

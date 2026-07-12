@@ -72,12 +72,18 @@ export default function PhotoGrid({
               selectable ? toggleSelect(photo.id) : onPhotoClick(photo)
             }
           >
-            <img
-              src={photo.thumbnailUrl}
-              alt={photo.name}
-              loading="lazy"
-              className="w-full h-full object-cover"
-            />
+            {photo.thumbnailUrl ? (
+              <img
+                src={photo.thumbnailUrl}
+                alt={photo.name}
+                loading="lazy"
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center bg-[var(--color-surface-glass)]">
+                <div className="w-5 h-5 border-2 border-[var(--color-accent-primary)] border-t-transparent rounded-full animate-spin" />
+              </div>
+            )}
 
             {/* Hover Overlay */}
             <div className="overlay">
