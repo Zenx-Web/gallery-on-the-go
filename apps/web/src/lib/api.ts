@@ -36,3 +36,7 @@ export function listDevices(): Promise<DeviceInfo[]> {
 export function deleteDevice(id: string): Promise<void> {
   return apiFetch<void>(`/api/devices/${id}`, { method: "DELETE" });
 }
+
+export function wakeDevice(id: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`/api/devices/${id}/wake`, { method: "POST" });
+}

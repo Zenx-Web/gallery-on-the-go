@@ -217,7 +217,7 @@ router.post('/:id/wake', authenticate, async (req: AuthenticatedRequest, res: Re
     // If the device is already connected via socket, nothing to do.
     const socketId = getDeviceSocketId(deviceId);
     if (socketId) {
-      res.json({ success: true, status: 'already_online' });
+      res.json({ success: true, data: { status: 'already_online' } });
       return;
     }
 
@@ -231,7 +231,6 @@ router.post('/:id/wake', authenticate, async (req: AuthenticatedRequest, res: Re
       res.status(422).json({
         success: false,
         error: 'Device has no FCM token. Open the app on the device first.',
-        status: 'no_fcm_token',
       });
       return;
     }
@@ -239,7 +238,7 @@ router.post('/:id/wake', authenticate, async (req: AuthenticatedRequest, res: Re
     const sent = await wakeDevice(device.fcmToken, deviceId);
     res.json({
       success: sent,
-      status: sent ? 'wake_sent' : 'fcm_failed',
+      data: { status: sent ? 'wake_sent' : 'fcm_failed' },
     });
   } catch (err) {
     res.status(500).json({ success: false, error: (err as Error).message });

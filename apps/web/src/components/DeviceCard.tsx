@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Smartphone, Check, RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
+import { wakeDevice } from "@/lib/api";
 
 interface DeviceCardProps {
   id: string;
@@ -44,9 +45,8 @@ export default function DeviceCard({
 
     setWakeState("sending");
     try {
-      const res = await fetch(`/api/devices/${id}/wake`, { method: "POST" });
-      const json = await res.json();
-      setWakeState(json.success ? "sent" : "failed");
+      await wakeDevice(id);
+      setWakeState("sent");
     } catch {
       setWakeState("failed");
     }
