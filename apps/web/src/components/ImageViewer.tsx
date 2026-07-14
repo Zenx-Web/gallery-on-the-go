@@ -25,6 +25,12 @@ import type { EditOptions } from "@/lib/fileTransfer";
 interface ImageViewerProps {
   isOpen: boolean;
   imageUrl: string;
+  /** MIME type of the current item — used to switch between image/video rendering. */
+  mimeType?: string;
+  /** Playable full blob URL when the current item is a video (poster = imageUrl). */
+  videoUrl?: string;
+  /** True while the full-res blob is still being fetched over the socket. */
+  isLoadingFull?: boolean;
   imageName: string;
   imageSize?: number;
   imageDate?: string;
@@ -48,6 +54,9 @@ function formatSize(bytes: number): string {
 export default function ImageViewer({
   isOpen,
   imageUrl,
+  mimeType,
+  videoUrl,
+  isLoadingFull = false,
   imageName,
   imageSize,
   imageDate,
@@ -67,6 +76,8 @@ export default function ImageViewer({
   const [rotateDegrees, setRotateDegrees] = useState(0);
   const [brightness, setBrightness] = useState(1);
   const [contrast, setContrast] = useState(1);
+
+  const isVideo = !!mimeType?.startsWith("video/");
 
   const handleDelete = () => {
     if (!onDelete) return;
@@ -166,28 +177,32 @@ export default function ImageViewer({
             </div>
 
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setZoom((z) => Math.max(z - 0.25, 0.5))}
-                className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
-              >
-                <ZoomOut className="w-4 h-4 text-white" />
-              </button>
-              <span className="text-xs text-white/60 font-mono w-12 text-center">
-                {Math.round(zoom * 100)}%
-              </span>
-              <button
-                onClick={() => setZoom((z) => Math.min(z + 0.25, 4))}
-                className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
-              >
-                <ZoomIn className="w-4 h-4 text-white" />
-              </button>
+              {!isVideo && (
+                <>
+                  <button
+                    onClick={() => setZoom((z) => Math.max(z - 0.25, 0.5))}
+                    className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
+                  >
+                    <ZoomOut className="w-4 h-4 text-white" />
+                  </button>
+                  <span className="text-xs text-white/60 font-mono w-12 text-center">
+                    {Math.round(zoom * 100)}%
+                  </span>
+                  <button
+                    onClick={() => setZoom((z) => Math.min(z + 0.25, 4))}
+                    className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
+                  >
+                    <ZoomIn className="w-4 h-4 text-white" />
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => setShowInfo(!showInfo)}
                 className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
               >
                 <Info className="w-4 h-4 text-white" />
               </button>
-              {onEdit && (
+              {onEdit && !isVideo && (
                 <button
                   onClick={() => setShowEdit(!showEdit)}
                   className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
@@ -232,7 +247,7 @@ export default function ImageViewer({
             </div>
           </motion.div>
 
-          {/* Image */}
+          {/* Image / Video */}
           <motion.div
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
@@ -241,13 +256,54 @@ export default function ImageViewer({
             className="max-w-[90vw] max-h-[85vh] overflow-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <img
-              src={imageUrl}
-              alt={imageName}
-              style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}
-              className="max-w-full max-h-[85vh] object-contain transition-transform duration-200 rounded-lg select-none"
-              draggable={false}
-            />
+            {isVideo ? (
+              videoUrl ? (
+                // The whole video is fetched over the socket before playback
+                // (no HTTP range streaming in the chunk protocol), so on a slow
+                // link this can take a while — the spinner below covers that.
+                <video
+                  key={videoUrl}
+                  src={videoUrl}
+                  poster={imageUrl || undefined}
+                  controls
+                  autoPlay
+                  className="max-w-full max-h-[85vh] object-contain rounded-lg"
+                />
+              ) : (
+                <div className="relative flex items-center justify-center">
+                  {imageUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={imageUrl}
+                      alt={imageName}
+                      className="max-w-full max-h-[85vh] object-contain rounded-lg opacity-60 select-none"
+                      draggable={false}
+                    />
+                  )}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                    <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <p className="text-xs text-white/80 font-medium">Loading video…</p>
+                  </div>
+                </div>
+              )
+            ) : (
+              <div className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={imageUrl}
+                  alt={imageName}
+                  style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}
+                  className="max-w-full max-h-[85vh] object-contain transition-transform duration-200 rounded-lg select-none"
+                  draggable={false}
+                />
+                {isLoadingFull && (
+                  <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-sm">
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span className="text-[11px] text-white/80 font-medium">Loading full resolution…</span>
+                  </div>
+                )}
+              </div>
+            )}
           </motion.div>
 
           {/* Navigation Arrows */}

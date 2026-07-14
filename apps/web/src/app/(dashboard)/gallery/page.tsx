@@ -127,6 +127,12 @@ export default function GalleryPage() {
 
   // Fetches a single page of a folder's contents — used for incremental
   // on-screen browsing (openFolder/loadMoreFiles below).
+  //
+  // The response is matched to the page we actually asked for: many
+  // ALBUM_FILES_RESPONSE events flow over the shared socket (other pages, the
+  // ZIP full-list fetch, a stale response from a folder we just navigated away
+  // from), and a one-shot listener keyed only on the event name would resolve
+  // with whichever arrives first — silently returning the wrong page.
   const fetchFolderPage = (
     folder: FolderItem,
     page: number,
@@ -134,8 +140,16 @@ export default function GalleryPage() {
   ): Promise<{ files: FileItem[]; hasMore: boolean }> => {
     const socket = getClientSocket();
     return new Promise((resolve, reject) => {
-      const onAlbumFiles = (data: { files: FileItem[]; hasMore: boolean }) => {
+      const onAlbumFiles = (data: {
+        files: FileItem[];
+        hasMore: boolean;
+        page?: number;
+        albumId?: string;
+      }) => {
+        // Ignore responses for a different page/folder than we requested.
+        if (typeof data.page === "number" && data.page !== page) return;
         socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
+        clearTimeout(timer);
         resolve({ files: sortByNewest(data.files), hasMore: data.hasMore });
       };
 
@@ -147,11 +161,35 @@ export default function GalleryPage() {
         pageSize,
       });
 
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
         reject(new Error("Failed to retrieve folder contents (timeout)"));
       }, 30000);
     });
+  };
+
+  // Retrying wrapper around fetchFolderPage. A big folder's pages compete with
+  // the constant stream of thumbnail requests for the device's attention, so
+  // an individual page fetch occasionally times out even though the device is
+  // perfectly reachable. Without retries, that single transient failure used
+  // to permanently disable infinite scroll (hasMore=false), stranding the user
+  // partway through a large folder — the cause of "only ~200-800 of 5000 load".
+  const fetchFolderPageWithRetry = async (
+    folder: FolderItem,
+    page: number,
+    pageSize: number,
+    retries = 3
+  ): Promise<{ files: FileItem[]; hasMore: boolean }> => {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fetchFolderPage(folder, page, pageSize);
+      } catch (err) {
+        lastErr = err;
+        if (attempt < retries) await sleep(800 * (attempt + 1));
+      }
+    }
+    throw lastErr;
   };
 
   // Fetches an ENTIRE folder in one shot — only used for ZIP downloads,
@@ -198,7 +236,7 @@ export default function GalleryPage() {
       setFilesHasMore(false);
       setFilesLoading(true);
 
-      fetchFolderPage(folder, 1, FOLDER_PAGE_SIZE)
+      fetchFolderPageWithRetry(folder, 1, FOLDER_PAGE_SIZE)
         .then(({ files: list, hasMore }) => {
           setFiles(list);
           setFilesHasMore(hasMore);
@@ -218,7 +256,7 @@ export default function GalleryPage() {
     const nextPage = filesPage + 1;
     setFilesLoadingMore(true);
 
-    fetchFolderPage(currentFolder, nextPage, FOLDER_PAGE_SIZE)
+    fetchFolderPageWithRetry(currentFolder, nextPage, FOLDER_PAGE_SIZE)
       .then(({ files: list, hasMore }) => {
         // Defensive dedup — guards against any duplicate items a paged
         // device-side query might still return across page boundaries.
@@ -230,8 +268,12 @@ export default function GalleryPage() {
         setFilesPage(nextPage);
       })
       .catch((err) => {
-        console.error("Failed to load more folder contents:", err);
-        setFilesHasMore(false);
+        // Keep hasMore=true so the sentinel stays mounted and the next scroll
+        // (or the observer re-firing) retries this page — a page fetch that
+        // failed even after its internal retries is treated as transient, not
+        // as "end of folder". Losing the rest of a 5000-item folder to one
+        // hiccup is far worse than an occasional extra retry.
+        console.error("Failed to load more folder contents (will retry):", err);
       })
       .finally(() => setFilesLoadingMore(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -725,11 +767,25 @@ export default function GalleryPage() {
         </AnimatePresence>
       </div>
 
-      {/* Image Viewer */}
+      {/* Image / Video Viewer */}
       {photos.length > 0 && (
         <ImageViewer
           isOpen={viewerOpen}
-          imageUrl={viewerUrl || photos[viewerIndex]?.thumbnailUrl || ""}
+          mimeType={photos[viewerIndex]?.mimeType}
+          // For a video, the full blob is the playable source and the
+          // thumbnail is the poster; for an image, the full-res blob (once
+          // fetched) replaces the thumbnail in place.
+          videoUrl={
+            photos[viewerIndex]?.mimeType?.startsWith("video/")
+              ? viewerUrl || undefined
+              : undefined
+          }
+          imageUrl={
+            photos[viewerIndex]?.mimeType?.startsWith("video/")
+              ? photos[viewerIndex]?.thumbnailUrl || ""
+              : viewerUrl || photos[viewerIndex]?.thumbnailUrl || ""
+          }
+          isLoadingFull={!viewerUrl}
           imageName={photos[viewerIndex]?.name || ""}
           imageSize={photos[viewerIndex]?.size}
           imageDate={photos[viewerIndex]?.createdAt}
