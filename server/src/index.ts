@@ -27,6 +27,12 @@ app.use(cors({
   credentials: true,
 }));
 
+// ─── Trust Proxy ───
+// Render (and most cloud hosts) sit behind a reverse proxy that adds the
+// X-Forwarded-For header. Without this, express-rate-limit throws a
+// ValidationError and blocks ALL API requests including device registration.
+app.set('trust proxy', 1);
+
 // ─── Rate Limiting ───
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
