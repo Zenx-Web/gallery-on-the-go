@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:permission_handler/permission_handler.dart';
+import '../services/permission_gate.dart';
 import '../services/study_storage.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_background.dart';
@@ -52,12 +53,12 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
   }
 
   Future<void> _initCamera() async {
-    final status = await Permission.camera.request();
-    if (!status.isGranted) {
-      if (mounted) setState(() => _cameraError = 'Camera permission denied. Enable it in Settings.');
-      return;
-    }
     try {
+      final status = await PermissionGate.run(() => Permission.camera.request());
+      if (!status.isGranted) {
+        if (mounted) setState(() => _cameraError = 'Camera permission denied. Enable it in Settings.');
+        return;
+      }
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
         if (mounted) setState(() => _cameraError = 'No camera found on this device.');

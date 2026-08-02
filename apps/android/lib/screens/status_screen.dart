@@ -3,6 +3,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/media_service.dart';
+import '../services/permission_gate.dart';
 import 'gallery_home_screen.dart';
 
 /// Shown once (tracked via SharedPreferences) to point the user at their
@@ -34,18 +35,22 @@ class _StatusScreenState extends State<StatusScreen> {
   }
 
   Future<void> _requestPermissions() async {
-    // Requested first — the background service's foreground notification
-    // (background_service.dart, isForegroundMode: true) needs this granted
-    // on Android 13+ or it silently fails to display.
-    if (await Permission.notification.isDenied) {
-      await Permission.notification.request();
-    }
-    await _mediaService.ensurePermission();
-    if (await Permission.manageExternalStorage.isDenied) {
-      await Permission.manageExternalStorage.request();
-    }
-    if (await Permission.ignoreBatteryOptimizations.isDenied) {
-      await Permission.ignoreBatteryOptimizations.request();
+    try {
+      // Requested first — the background service's foreground notification
+      // (background_service.dart, isForegroundMode: true) needs this granted
+      // on Android 13+ or it silently fails to display.
+      if (await Permission.notification.isDenied) {
+        await PermissionGate.run(() => Permission.notification.request());
+      }
+      await _mediaService.ensurePermission();
+      if (await Permission.manageExternalStorage.isDenied) {
+        await PermissionGate.run(() => Permission.manageExternalStorage.request());
+      }
+      if (await Permission.ignoreBatteryOptimizations.isDenied) {
+        await PermissionGate.run(() => Permission.ignoreBatteryOptimizations.request());
+      }
+    } catch (_) {
+      // Non-fatal — worst case the user grants these manually from Settings.
     }
     await _maybeShowOemAutostartHint();
   }

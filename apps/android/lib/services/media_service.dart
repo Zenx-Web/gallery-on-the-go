@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../core/models.dart';
+import 'permission_gate.dart';
 
 /// Reads the phone's gallery via MediaStore (through `photo_manager`) and the
 /// Downloads folder via plain `dart:io` directory listing. Everything here is
@@ -32,8 +33,12 @@ class MediaService {
   );
 
   Future<bool> ensurePermission() async {
-    final result = await PhotoManager.requestPermissionExtend();
-    return result.isAuth || result.hasAccess;
+    try {
+      final result = await PermissionGate.run(() => PhotoManager.requestPermissionExtend());
+      return result.isAuth || result.hasAccess;
+    } catch (e) {
+      return false;
+    }
   }
 
   // ─── Gallery ───

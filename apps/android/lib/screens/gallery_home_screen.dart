@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import '../services/permission_gate.dart';
 import '../theme/app_theme.dart';
 import '../widgets/album_card.dart';
 import '../widgets/empty_state.dart';
@@ -64,7 +65,7 @@ class _GalleryHomeScreenState extends State<GalleryHomeScreen>
     });
 
     try {
-      final permitted = await PhotoManager.requestPermissionExtend();
+      final permitted = await PermissionGate.run(() => PhotoManager.requestPermissionExtend());
       if (!permitted.isAuth && !permitted.hasAccess) {
         if (mounted) {
           setState(() {

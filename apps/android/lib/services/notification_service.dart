@@ -1,6 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
+
+import 'permission_gate.dart';
 
 /// Wraps flutter_local_notifications for study reminders (task due dates,
 /// exam countdowns). Uses `inexactAllowWhileIdle` scheduling rather than
@@ -50,10 +53,16 @@ class NotificationService {
   }
 
   Future<void> requestPermission() async {
-    await _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+    try {
+      await PermissionGate.run(() async {
+        return _plugin
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>()
+            ?.requestNotificationsPermission();
+      });
+    } catch (e) {
+      debugPrint('Notification permission request failed (non-fatal): $e');
+    }
   }
 
   /// Stable notification id derived from a string key (task/exam id) so the
