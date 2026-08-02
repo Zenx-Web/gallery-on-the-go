@@ -65,10 +65,36 @@ dependencies:
   # Native Android share sheet for the fullscreen media viewer
   share_plus: ^10.1.3
 
+  # Real camera capture for the document scanner
+  camera: ^0.11.0
+
+  # Pick PDFs/images from device storage into the library
+  file_picker: ^10.3.10
+
+  # Local scheduled notifications for study/task/exam reminders
+  flutter_local_notifications: ^18.0.1
+
+  # IANA timezone database for scheduling exact local-time notifications
+  timezone: ^0.9.4
+
+  # Pure-Dart PDF generation for real "Save as PDF" scanner output
+  pdf: ^3.11.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
 
+  # Generates all mipmap launcher icon densities from a single source PNG —
+  # run `dart run flutter_launcher_icons` after placing the logo at the path below.
+  flutter_launcher_icons: ^0.14.3
+
 flutter:
   uses-material-design: true
+
+flutter_launcher_icons:
+  android: true
+  image_path: "assets/icon/logo.png"
+  # Adaptive icon: white backdrop matches the logo's own white canvas.
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon/logo.png"

@@ -18,7 +18,8 @@ const body = {
 fetch('https://api.render.com/v1/services', {
   method: 'POST',
   headers: {
-    'Authorization': 'Bearer rnd_DSc839FW5s76IYUE431WsMpKFOFq',
+    // Set RENDER_API_KEY in your shell environment — never hardcode API keys in source.
+    'Authorization': `Bearer ${process.env.RENDER_API_KEY}`,
     'Content-Type': 'application/json'
   },
   body: JSON.stringify(body)

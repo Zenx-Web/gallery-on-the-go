@@ -79,6 +79,72 @@ class GalleryListResponse {
       };
 }
 
+/// A single entry (folder or file) inside a directory listing — covers ANY
+/// path under shared storage, not just MediaStore-indexed media, so
+/// non-media files (PDFs, docs, archives, other apps' folders) show up too.
+class FolderEntry {
+  final String id;
+  final String name;
+  final String path;
+  final bool isDirectory;
+  final int size;
+  final String? mimeType;
+  final String modifiedAt;
+
+  FolderEntry({
+    required this.id,
+    required this.name,
+    required this.path,
+    required this.isDirectory,
+    required this.size,
+    this.mimeType,
+    required this.modifiedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'path': path,
+        'isDirectory': isDirectory,
+        'size': size,
+        if (mimeType != null) 'mimeType': mimeType,
+        'modifiedAt': modifiedAt,
+      };
+}
+
+class DirectoryListResponse {
+  final String path;
+  final String? parentPath;
+  final List<FolderEntry> entries;
+  final int total;
+  final int page;
+  final int pageSize;
+  final bool hasMore;
+  final String? error;
+
+  DirectoryListResponse({
+    required this.path,
+    this.parentPath,
+    required this.entries,
+    required this.total,
+    required this.page,
+    required this.pageSize,
+    required this.hasMore,
+    this.error,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'path': path,
+        if (parentPath != null) 'parentPath': parentPath,
+        'entries': entries.map((e) => e.toJson()).toList(),
+        'total': total,
+        'page': page,
+        'pageSize': pageSize,
+        'hasMore': hasMore,
+        if (error != null) 'error': error,
+      };
+}
+
 class PagedFilesResponse {
   final List<FileItem> files;
   final int total;

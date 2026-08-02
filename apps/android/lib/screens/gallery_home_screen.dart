@@ -9,6 +9,7 @@ import '../widgets/media_tile.dart';
 import '../widgets/search_field.dart';
 import '../widgets/section_header.dart';
 import 'album_detail_screen.dart';
+import 'folder_browser_screen.dart';
 import 'media_viewer_screen.dart';
 
 /// Top-level gallery screen — a unified "Photos" timeline (all assets,
@@ -39,7 +40,7 @@ class _GalleryHomeScreenState extends State<GalleryHomeScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     WidgetsBinding.instance.addObserver(this);
     _load();
   }
@@ -168,6 +169,7 @@ class _GalleryHomeScreenState extends State<GalleryHomeScreen>
           tabs: const [
             Tab(text: 'Photos'),
             Tab(text: 'Albums'),
+            Tab(text: 'Folders'),
           ],
         ),
         Expanded(
@@ -176,6 +178,7 @@ class _GalleryHomeScreenState extends State<GalleryHomeScreen>
             children: [
               _buildPhotosTab(),
               _buildAlbumsTab(),
+              const FolderBrowserScreen(),
             ],
           ),
         ),

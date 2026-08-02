@@ -13,8 +13,19 @@ class MediaService {
   static const String downloadsAlbumId = '__downloads__';
   static const String downloadsPath = '/storage/emulated/0/Download';
 
+  /// Root of shared storage — browsable via MANAGE_EXTERNAL_STORAGE, the
+  /// same "All files access" permission already granted at startup (see
+  /// status_screen.dart). This is the more reliable choice for full-device
+  /// folder browsing versus the Storage Access Framework: SAF only grants
+  /// one user-picked tree at a time via a system dialog with no arbitrary
+  /// recursive navigation, whereas MANAGE_EXTERNAL_STORAGE — already in use
+  /// here for Downloads — gives direct, permission-already-granted
+  /// dart:io access to the entire partition in one grant.
+  static const String storageRootPath = '/storage/emulated/0';
+
   final Map<String, AssetEntity> _assetCache = {};
   final Map<String, File> _downloadFileCache = {};
+  final Map<String, File> _fsFileCache = {};
 
   static final FilterOptionGroup _newestFirst = FilterOptionGroup(
     orders: [const OrderOption(type: OrderOptionType.createDate, asc: false)],
@@ -38,15 +49,26 @@ class MediaService {
     // state and re-query MediaStore fresh, without requiring a restart.
     await PhotoManager.clearFileCache();
 
+    // NOTE: no filterOption here. Passing a FilterOptionGroup with an
+    // OrderOption into getAssetPathList makes photo_manager order at the asset
+    // level and drop its per-bucket DISTINCT, so the same folder comes back
+    // more than once — which is exactly why the web panel showed duplicate
+    // folders while the on-device gallery screen (which calls getAssetPathList
+    // WITHOUT a filterOption) never did. Ordering the album *list* by photo
+    // date is meaningless anyway; file ordering is applied per-album in
+    // listAlbumFiles below.
     final paths = await PhotoManager.getAssetPathList(
       type: RequestType.common,
       onlyAll: false,
-      filterOption: _newestFirst,
     );
 
     var totalFiles = 0;
     final albums = <GalleryAlbum>[];
+    // Defensive dedupe by bucket id — cheap insurance so a duplicate from any
+    // future query change can't reach the UI as a repeated folder.
+    final seenAlbumIds = <String>{};
     for (final path in paths) {
+      if (!seenAlbumIds.add(path.id)) continue;
       final count = await path.assetCountAsync;
       totalFiles += count;
       albums.add(GalleryAlbum(
@@ -91,7 +113,12 @@ class MediaService {
     final assets = await album.getAssetListRange(start: start, end: start + pageSize);
 
     final files = <FileItem>[];
+    // Dedupe within the page — createDate ordering is non-unique (bulk imports,
+    // screenshots, etc. share timestamps), so a range query can occasionally
+    // surface the same asset twice. Keep the first occurrence.
+    final seenAssetIds = <String>{};
     for (final asset in assets) {
+      if (!seenAssetIds.add(asset.id)) continue;
       _assetCache[asset.id] = asset;
       files.add(await _toFileItem(asset));
     }
@@ -101,7 +128,11 @@ class MediaService {
       total: total,
       page: page,
       pageSize: pageSize,
-      hasMore: (page - 1) * pageSize + assets.length < total,
+      // Base hasMore on how far the range reached into the album (raw
+      // assets.length), NOT files.length — otherwise dropping an in-page
+      // duplicate could shrink the count below pageSize and prematurely
+      // report "end of folder" while assets remain.
+      hasMore: start + assets.length < total,
     );
   }
 
@@ -157,6 +188,109 @@ class MediaService {
       pageSize: pageSize,
       hasMore: end < total,
     );
+  }
+
+  // ─── Folder browser (any device folder, not just gallery/downloads) ───
+
+  /// Lists one level of an arbitrary directory under shared storage —
+  /// folders first (alphabetical), then files (alphabetical). Every entry
+  /// and the whole directory read is individually try/caught: Android
+  /// blocks direct access to other apps' `Android/data` and `Android/obb`
+  /// even under MANAGE_EXTERNAL_STORAGE (an OS-level restriction, not a
+  /// permission gap), and broken symlinks/edge-case entries can throw on
+  /// `stat()` — both are surfaced gracefully instead of crashing the browser.
+  Future<DirectoryListResponse> listDirectory({
+    String? path,
+    required int page,
+    required int pageSize,
+  }) async {
+    final targetPath = (path == null || path.isEmpty) ? storageRootPath : path;
+    final dir = Directory(targetPath);
+
+    if (!await dir.exists()) {
+      return DirectoryListResponse(
+        path: targetPath,
+        parentPath: _parentOf(targetPath),
+        entries: const [],
+        total: 0,
+        page: page,
+        pageSize: pageSize,
+        hasMore: false,
+        error: 'Folder not found',
+      );
+    }
+
+    final folders = <FolderEntry>[];
+    final files = <FolderEntry>[];
+    try {
+      await for (final entity in dir.list(followLinks: false)) {
+        try {
+          final stat = await entity.stat();
+          final segments = entity.uri.pathSegments.where((s) => s.isNotEmpty);
+          final name = segments.isEmpty ? entity.path : segments.last;
+          final isDir = stat.type == FileSystemEntityType.directory;
+          final entry = FolderEntry(
+            id: _fsIdFor(entity.path),
+            name: name,
+            path: entity.path,
+            isDirectory: isDir,
+            size: isDir ? 0 : stat.size,
+            mimeType: isDir ? null : _guessMimeType(entity.path),
+            modifiedAt: stat.modified.toIso8601String(),
+          );
+          (isDir ? folders : files).add(entry);
+        } catch (_) {
+          continue;
+        }
+      }
+    } on FileSystemException {
+      return DirectoryListResponse(
+        path: targetPath,
+        parentPath: _parentOf(targetPath),
+        entries: const [],
+        total: 0,
+        page: page,
+        pageSize: pageSize,
+        hasMore: false,
+        error: "Couldn't read this folder — it may be restricted by Android, "
+            "or storage permission hasn't been granted yet.",
+      );
+    }
+
+    folders.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    files.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final combined = [...folders, ...files];
+
+    final total = combined.length;
+    final start = (page - 1) * pageSize;
+    final end = (start + pageSize).clamp(0, total);
+    final pageEntries = start < total ? combined.sublist(start, end) : <FolderEntry>[];
+
+    for (final entry in pageEntries) {
+      if (!entry.isDirectory) _fsFileCache[entry.id] = File(entry.path);
+    }
+
+    return DirectoryListResponse(
+      path: targetPath,
+      parentPath: _parentOf(targetPath),
+      entries: pageEntries,
+      total: total,
+      page: page,
+      pageSize: pageSize,
+      hasMore: end < total,
+    );
+  }
+
+  String _fsIdFor(String path) => 'fs_${path.hashCode}';
+
+  /// Null at the storage root (nothing to navigate up to).
+  String? _parentOf(String path) {
+    final normalized = path.endsWith('/') && path.length > 1 ? path.substring(0, path.length - 1) : path;
+    if (normalized == storageRootPath || normalized.isEmpty) return null;
+    final idx = normalized.lastIndexOf('/');
+    if (idx <= 0) return null;
+    final parent = normalized.substring(0, idx);
+    return parent.length < storageRootPath.length ? null : parent;
   }
 
   // ─── Search ───
@@ -223,6 +357,9 @@ class MediaService {
   /// Resolves a `fileId` (from either the gallery cache or the downloads
   /// cache) to an absolute path readable via `dart:io`.
   Future<String?> resolveFilePath(String fileId) async {
+    final fsFile = _fsFileCache[fileId];
+    if (fsFile != null) return fsFile.path;
+
     final downloadFile = _downloadFileCache[fileId];
     if (downloadFile != null) return downloadFile.path;
 

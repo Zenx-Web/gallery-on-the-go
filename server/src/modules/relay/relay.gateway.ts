@@ -150,6 +150,11 @@ function handleDeviceConnection(socket: Socket) {
     relayToClient(data._clientSocketId, SOCKET_EVENTS.DOWNLOADS.LIST_RESPONSE, data);
   });
 
+  // ─── Folder browser responses ───
+  socket.on(SOCKET_EVENTS.FOLDERS.LIST_RESPONSE, (data: any) => {
+    relayToClient(data._clientSocketId, SOCKET_EVENTS.FOLDERS.LIST_RESPONSE, data);
+  });
+
   // ─── File streaming responses ───
   socket.on(SOCKET_EVENTS.FILE.CHUNK, (data: any) => {
     relayToClient(data._clientSocketId, SOCKET_EVENTS.FILE.CHUNK, data);
@@ -229,6 +234,14 @@ function handleClientConnection(socket: Socket) {
   // ─── Downloads requests ───
   socket.on(SOCKET_EVENTS.DOWNLOADS.LIST, (data: { deviceId: string; page: number; pageSize: number }) => {
     relayToDevice(data.deviceId, SOCKET_EVENTS.DOWNLOADS.LIST, {
+      ...data,
+      _clientSocketId: socket.id,
+    });
+  });
+
+  // ─── Folder browser requests ───
+  socket.on(SOCKET_EVENTS.FOLDERS.LIST, (data: { deviceId: string; path?: string; page: number; pageSize: number }) => {
+    relayToDevice(data.deviceId, SOCKET_EVENTS.FOLDERS.LIST, {
       ...data,
       _clientSocketId: socket.id,
     });

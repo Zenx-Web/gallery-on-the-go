@@ -107,6 +107,35 @@ export interface DownloadsListResponse {
   hasMore: boolean;
 }
 
+// ─── Folder Browser (full device storage, any folder) ───
+
+export interface FolderEntry {
+  id: string;
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size: number;
+  mimeType?: string;
+  modifiedAt: string;
+}
+
+export interface FolderListRequest {
+  path?: string; // omitted/undefined = storage root
+  page: number;
+  pageSize: number;
+}
+
+export interface DirectoryListResponse {
+  path: string;
+  parentPath?: string;
+  entries: FolderEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  error?: string;
+}
+
 export interface SearchRequest {
   query: string;
   type?: 'filename' | 'date' | 'folder';

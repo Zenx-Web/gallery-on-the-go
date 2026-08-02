@@ -74,7 +74,8 @@ class _StatusScreenState extends State<StatusScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('GalleryOnTheGo')),
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(title: const Text('Gallery')),
       body: const SafeArea(
         child: GalleryHomeScreen(),
       ),

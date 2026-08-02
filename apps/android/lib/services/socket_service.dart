@@ -170,6 +170,20 @@ class SocketService {
       });
     });
 
+    socket.on(SocketEvents.folderList, (data) async {
+      final map = Map<String, dynamic>.from(data as Map);
+      final clientSocketId = map['_clientSocketId'] as String;
+      final response = await mediaService.listDirectory(
+        path: map['path'] as String?,
+        page: (map['page'] as num?)?.toInt() ?? Pagination.defaultPage,
+        pageSize: (map['pageSize'] as num?)?.toInt() ?? Pagination.defaultPageSize,
+      );
+      socket.emit(SocketEvents.folderListResponse, {
+        ...response.toJson(),
+        '_clientSocketId': clientSocketId,
+      });
+    });
+
     socket.on(SocketEvents.searchQuery, (data) async {
       final map = Map<String, dynamic>.from(data as Map);
       final clientSocketId = map['_clientSocketId'] as String;

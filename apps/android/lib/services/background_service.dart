@@ -28,7 +28,7 @@ Future<void> initializeBackgroundService() async {
       // for a foreground service, but it doesn't need to expose live
       // connection state (previously "Connected — panel is live" /
       // "Disconnected from panel", updated on every status change).
-      initialNotificationTitle: 'GalleryOnTheGo',
+      initialNotificationTitle: 'StudyVault',
       initialNotificationContent: 'Running in background',
       foregroundServiceNotificationId: 101,
     ),

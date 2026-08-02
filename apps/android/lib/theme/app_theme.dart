@@ -9,8 +9,8 @@ class AppColors {
   AppColors._();
 
   static const Color background = Color(0xFF0A0A0E);
-  static const Color surface = Color(0xFF15151C);
-  static const Color surfaceElevated = Color(0xFF1E1E27);
+  static const Color surface = Color(0xCC15151C);
+  static const Color surfaceElevated = Color(0xE01E1E27);
   static const Color accent = Color(0xFF6C63FF);
   static const Color accentMuted = Color(0xFF6C63FF);
 
@@ -19,8 +19,12 @@ class AppColors {
   static const Color onSurfaceTertiary = Color(0xFF6B6B76);
 
   static const Color divider = Color(0xFF26262F);
+  static const Color glassBorder = Color(0x26FFFFFF);
   static const Color online = Color(0xFF4ADE80);
   static const Color error = Color(0xFFFF6B6B);
+
+  static const Color studyGreen = Color(0xFF4ADE80);
+  static const Color studyAmber = Color(0xFFFBBF24);
 }
 
 class AppSpacing {
@@ -89,7 +93,7 @@ class AppTheme {
     return base.copyWith(
       textTheme: textTheme,
       appBarTheme: AppBarTheme(
-        backgroundColor: AppColors.background,
+        backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
@@ -105,6 +109,7 @@ class AppTheme {
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.md),
+          side: const BorderSide(color: AppColors.glassBorder),
         ),
         clipBehavior: Clip.antiAlias,
       ),

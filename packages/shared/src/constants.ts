@@ -56,6 +56,12 @@ export const SOCKET_EVENTS = {
     LIST_RESPONSE: 'downloads:list-response',
   },
 
+  // Folder browser events — full device storage, any folder, not just media
+  FOLDERS: {
+    LIST: 'folders:list',
+    LIST_RESPONSE: 'folders:list-response',
+  },
+
   // File streaming events
   FILE: {
     REQUEST: 'file:request',

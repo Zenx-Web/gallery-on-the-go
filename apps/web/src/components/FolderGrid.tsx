@@ -43,9 +43,16 @@ const folderColors: Record<string, string> = {
 };
 
 export default function FolderGrid({ folders, onFolderClick, onDownloadZip }: FolderGridProps) {
+  // Defensive dedupe by id — the device should already send each folder once,
+  // but rendering a duplicate here would show the user the same folder twice.
+  // Dedupe by id (not name): two folders sharing a name but not an id are
+  // genuinely distinct (e.g. same-named folders on internal + SD storage).
+  const seen = new Set<string>();
+  const uniqueFolders = folders.filter((f) => (seen.has(f.id) ? false : seen.add(f.id)));
+
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-      {folders.map((folder, index) => {
+      {uniqueFolders.map((folder, index) => {
         const type = folder.type || "other";
         const Icon = folderIcons[type] || Folder;
         const colorClass = folderColors[type] || folderColors.other;

@@ -30,6 +30,10 @@ class SocketEvents {
   static const String downloadsList = 'downloads:list';
   static const String downloadsListResponse = 'downloads:list-response';
 
+  // Folder browser events — full device storage, any folder, not just media
+  static const String folderList = 'folders:list';
+  static const String folderListResponse = 'folders:list-response';
+
   // File streaming events
   static const String fileRequest = 'file:request';
   static const String fileChunk = 'file:chunk';

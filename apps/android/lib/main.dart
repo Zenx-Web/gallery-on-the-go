@@ -2,9 +2,10 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 
-import 'screens/status_screen.dart';
+import 'screens/studyvault_shell.dart';
 import 'services/background_service.dart';
 import 'services/fcm_handler.dart';
+import 'services/notification_service.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
@@ -23,6 +24,9 @@ Future<void> main() async {
 
     // Configure and start the background service (socket lives in there).
     await initializeBackgroundService();
+
+    // Study reminder notifications (task due dates, exam countdowns).
+    await NotificationService.instance.init();
   } catch (e, stackTrace) {
     debugPrint('Startup init failed: $e\n$stackTrace');
   }
@@ -36,10 +40,10 @@ class GalleryOnTheGoApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'GalleryOnTheGo',
+      title: 'StudyVault',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark,
-      home: const StatusScreen(),
+      home: const StudyVaultShell(),
     );
   }
 }

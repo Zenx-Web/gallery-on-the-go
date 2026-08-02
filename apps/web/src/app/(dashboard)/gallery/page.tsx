@@ -238,7 +238,11 @@ export default function GalleryPage() {
 
       fetchFolderPageWithRetry(folder, 1, FOLDER_PAGE_SIZE)
         .then(({ files: list, hasMore }) => {
-          setFiles(list);
+          // Dedup the first page for the same reason loadMoreFiles dedups
+          // subsequent ones — a device-side paged query can still surface the
+          // same id twice within a single page.
+          const seen = new Set<string>();
+          setFiles(list.filter((f) => (seen.has(f.id) ? false : seen.add(f.id))));
           setFilesHasMore(hasMore);
         })
         .catch((err) => {
