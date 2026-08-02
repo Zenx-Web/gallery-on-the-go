@@ -17,12 +17,13 @@ class _PlannerScreenState extends State<PlannerScreen>
 
   List<TaskItem> _tasks = [];
   List<ExamItem> _exams = [];
+  List<TimetableEntry> _timetable = [];
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this)
+    _tabController = TabController(length: 4, vsync: this)
       ..addListener(() => setState(() {}));
     _selectedDay = DateTime.now().weekday - 1;
     NotificationService.instance.requestPermission();
@@ -38,11 +39,20 @@ class _PlannerScreenState extends State<PlannerScreen>
   Future<void> _loadAll() async {
     final tasks = await StudyStorage.instance.loadTasks();
     final exams = await StudyStorage.instance.loadExams();
-    if (mounted) setState(() { _tasks = tasks; _exams = exams; _loading = false; });
+    final timetable = await StudyStorage.instance.loadTimetable();
+    if (mounted) {
+      setState(() {
+        _tasks = tasks;
+        _exams = exams;
+        _timetable = timetable;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _saveTasks() => StudyStorage.instance.saveTasks(_tasks);
   Future<void> _saveExams() => StudyStorage.instance.saveExams(_exams);
+  Future<void> _saveTimetable() => StudyStorage.instance.saveTimetable(_timetable);
 
   void _toggle(String id) {
     final i = _tasks.indexWhere((t) => t.id == id);
@@ -108,6 +118,24 @@ class _PlannerScreenState extends State<PlannerScreen>
     NotificationService.instance.cancel(id);
   }
 
+  void _addClass(String subject, int dayOfWeek, String startTime, String endTime, String room) {
+    final entry = TimetableEntry(
+      id: StudyStorage.instance.newId,
+      subject: subject,
+      dayOfWeek: dayOfWeek,
+      startTime: startTime,
+      endTime: endTime,
+      room: room,
+    );
+    setState(() => _timetable.add(entry));
+    _saveTimetable();
+  }
+
+  void _deleteClass(String id) {
+    setState(() => _timetable.removeWhere((e) => e.id == id));
+    _saveTimetable();
+  }
+
   void _handleAddPressed(BuildContext context) {
     switch (_tabController.index) {
       case 0:
@@ -115,6 +143,9 @@ class _PlannerScreenState extends State<PlannerScreen>
         break;
       case 1:
         _showAddExamSheet(context);
+        break;
+      case 3:
+        _showAddClassSheet(context);
         break;
     }
   }
@@ -146,6 +177,7 @@ class _PlannerScreenState extends State<PlannerScreen>
               Tab(text: 'Tasks'),
               Tab(text: 'Exams'),
               Tab(text: 'Assignments'),
+              Tab(text: 'Timetable'),
             ],
           ),
           Expanded(
@@ -155,6 +187,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                 _buildTasksList(),
                 _buildExamsList(),
                 _buildEmptyState(Icons.assignment_outlined, 'No assignments yet'),
+                _buildTimetableList(),
               ],
             ),
           ),
@@ -291,6 +324,44 @@ class _PlannerScreenState extends State<PlannerScreen>
           ),
           onDismissed: (_) => _deleteExam(exam.id),
           child: _ExamCard(exam: exam),
+        );
+      },
+    );
+  }
+
+  Widget _buildTimetableList() {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    final dayOfWeek = _selectedDay + 1;
+    final entries = _timetable.where((e) => e.dayOfWeek == dayOfWeek).toList()
+      ..sort((a, b) => a.startTime.compareTo(b.startTime));
+    if (entries.isEmpty) {
+      return _buildEmptyState(
+        Icons.calendar_today_outlined,
+        _timetable.isEmpty
+            ? 'No classes yet — tap + to add one'
+            : 'No classes on this day',
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      itemCount: entries.length,
+      separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
+      itemBuilder: (context, i) {
+        final entry = entries[i];
+        return Dismissible(
+          key: ValueKey(entry.id),
+          direction: DismissDirection.endToStart,
+          background: Container(
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.only(right: AppSpacing.lg),
+            decoration: BoxDecoration(
+              color: AppColors.error.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
+            child: const Icon(Icons.delete_outline, color: AppColors.error),
+          ),
+          onDismissed: (_) => _deleteClass(entry.id),
+          child: _TimetableCard(entry: entry),
         );
       },
     );
@@ -468,6 +539,109 @@ class _PlannerScreenState extends State<PlannerScreen>
     );
   }
 
+  void _showAddClassSheet(BuildContext context) {
+    final subjectCtrl = TextEditingController();
+    final roomCtrl = TextEditingController();
+    int dayOfWeek = _selectedDay + 1;
+    TimeOfDay startTime = const TimeOfDay(hour: 9, minute: 0);
+    TimeOfDay endTime = const TimeOfDay(hour: 10, minute: 0);
+    const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surfaceElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => Padding(
+          padding: EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.xl, AppSpacing.xl, AppSpacing.xl + MediaQuery.of(ctx).viewInsets.bottom),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Add Class', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: AppSpacing.lg),
+                TextField(controller: subjectCtrl, autofocus: true, decoration: const InputDecoration(hintText: 'Subject (e.g. Physics)')),
+                const SizedBox(height: AppSpacing.md),
+                TextField(controller: roomCtrl, decoration: const InputDecoration(hintText: 'Room (optional)')),
+                const SizedBox(height: AppSpacing.md),
+                Wrap(
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.sm,
+                  children: List.generate(7, (i) {
+                    final day = i + 1;
+                    final selected = dayOfWeek == day;
+                    return ChoiceChip(
+                      label: Text(dayLabels[i]),
+                      selected: selected,
+                      onSelected: (_) => setSheet(() => dayOfWeek = day),
+                      selectedColor: AppColors.accent.withOpacity(0.2),
+                      side: BorderSide(color: selected ? AppColors.accent : AppColors.divider),
+                      labelStyle: TextStyle(
+                        color: selected ? AppColors.accent : AppColors.onSurfaceSecondary,
+                        fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                      ),
+                    );
+                  }),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          final picked = await showTimePicker(context: ctx, initialTime: startTime);
+                          if (picked != null) setSheet(() => startTime = picked);
+                        },
+                        icon: const Icon(Icons.schedule_outlined, size: 18),
+                        label: Text('Start ${startTime.format(ctx)}'),
+                        style: OutlinedButton.styleFrom(foregroundColor: AppColors.accent, side: const BorderSide(color: AppColors.accent)),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          final picked = await showTimePicker(context: ctx, initialTime: endTime);
+                          if (picked != null) setSheet(() => endTime = picked);
+                        },
+                        icon: const Icon(Icons.schedule_outlined, size: 18),
+                        label: Text('End ${endTime.format(ctx)}'),
+                        style: OutlinedButton.styleFrom(foregroundColor: AppColors.accent, side: const BorderSide(color: AppColors.accent)),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.xl),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () {
+                      if (subjectCtrl.text.trim().isEmpty) return;
+                      _addClass(
+                        subjectCtrl.text.trim(),
+                        dayOfWeek,
+                        _formatTimeOfDay(startTime),
+                        _formatTimeOfDay(endTime),
+                        roomCtrl.text.trim(),
+                      );
+                      Navigator.pop(ctx);
+                    },
+                    style: FilledButton.styleFrom(backgroundColor: AppColors.accent),
+                    child: const Text('Add Class'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Color _priorityColor(String p) => switch (p) {
     'high' => AppColors.error,
     'low' => AppColors.studyGreen,
@@ -484,6 +658,17 @@ String _dueLabel(DateTime d) {
   final period = d.hour >= 12 ? 'PM' : 'AM';
   final minute = d.minute.toString().padLeft(2, '0');
   return '${d.month}/${d.day} · $hour:$minute $period';
+}
+
+String _formatTimeOfDay(TimeOfDay t) =>
+    '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+String _formatTimeLabel(String hhmm) {
+  final parts = hhmm.split(':');
+  final hour24 = int.parse(parts[0]);
+  final hour = hour24 % 12 == 0 ? 12 : hour24 % 12;
+  final period = hour24 >= 12 ? 'PM' : 'AM';
+  return '$hour:${parts[1]} $period';
 }
 
 class _TaskCard extends StatelessWidget {
@@ -612,6 +797,56 @@ class _ExamCard extends StatelessWidget {
               ),
               Text('left', style: Theme.of(context).textTheme.bodySmall),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TimetableCard extends StatelessWidget {
+  const _TimetableCard({required this.entry});
+  final TimetableEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: AppColors.accent.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+            ),
+            child: const Icon(Icons.school_outlined, color: AppColors.accent, size: 20),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.subject,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                if (entry.room.isNotEmpty)
+                  Text(entry.room, style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+          ),
+          Text(
+            '${_formatTimeLabel(entry.startTime)} – ${_formatTimeLabel(entry.endTime)}',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.accent,
+                  fontWeight: FontWeight.w600,
+                ),
           ),
         ],
       ),

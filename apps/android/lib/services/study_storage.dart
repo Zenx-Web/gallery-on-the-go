@@ -77,6 +77,44 @@ class ExamItem {
       );
 }
 
+/// A recurring weekly class slot (not tied to a specific date) — e.g. every
+/// Monday 09:00-10:00, Physics, Room 204.
+class TimetableEntry {
+  TimetableEntry({
+    required this.id,
+    required this.subject,
+    required this.dayOfWeek,
+    required this.startTime,
+    required this.endTime,
+    this.room = '',
+  });
+
+  final String id;
+  final String subject;
+  final int dayOfWeek; // 1=Monday .. 7=Sunday, matches DateTime.weekday
+  final String startTime; // 'HH:mm', 24h zero-padded — sortable as a string
+  final String endTime;
+  final String room;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'subject': subject,
+        'dayOfWeek': dayOfWeek,
+        'startTime': startTime,
+        'endTime': endTime,
+        'room': room,
+      };
+
+  factory TimetableEntry.fromJson(Map<String, dynamic> j) => TimetableEntry(
+        id: j['id'] as String,
+        subject: j['subject'] as String,
+        dayOfWeek: (j['dayOfWeek'] as num).toInt(),
+        startTime: j['startTime'] as String,
+        endTime: j['endTime'] as String,
+        room: (j['room'] as String?) ?? '',
+      );
+}
+
 
 class FlashCard {
   FlashCard({required this.front, required this.back, this.mastered = false});
@@ -180,6 +218,7 @@ class StudyStorage {
   static const _decksKey = 'sv_decks';
   static const _foldersKey = 'sv_folders';
   static const _examsKey = 'sv_exams';
+  static const _timetableKey = 'sv_timetable';
 
   String get newId => _uuid.v4();
 
@@ -232,6 +271,31 @@ class StudyStorage {
   }
 
   List<ExamItem> _defaultExams() => [];
+
+  // ── Timetable ──────────────────────────────────────────────────────────────
+
+  Future<List<TimetableEntry>> loadTimetable() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_timetableKey);
+      if (raw == null) return _defaultTimetable();
+      return (jsonDecode(raw) as List)
+          .map((e) => TimetableEntry.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return _defaultTimetable();
+    }
+  }
+
+  Future<void> saveTimetable(List<TimetableEntry> entries) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _timetableKey,
+      jsonEncode(entries.map((e) => e.toJson()).toList()),
+    );
+  }
+
+  List<TimetableEntry> _defaultTimetable() => [];
 
   // ── Decks ──────────────────────────────────────────────────────────────────
 
