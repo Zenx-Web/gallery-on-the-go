@@ -192,7 +192,7 @@ class _HomeScreenState extends State<HomeScreen> {
       mainAxisSpacing: AppSpacing.md,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      childAspectRatio: 1.6,
+      childAspectRatio: 1.45,
       children: [
         DashboardCard(
           icon: Icons.document_scanner_outlined,

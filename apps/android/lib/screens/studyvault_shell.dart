@@ -23,11 +23,13 @@ class _StudyVaultShellState extends State<StudyVaultShell> {
 
   void _switchTab(int index) => setState(() => _selectedIndex = index);
 
-  // Built lazily so HomeScreen can reference _switchTab.
-  late final List<Widget> _pages = [
+  // Rebuilt on every tab switch (not cached) so ScannerScreen's isActive flag
+  // stays in sync — its camera should only run while its tab is shown, even
+  // though IndexedStack keeps every tab mounted underneath.
+  List<Widget> get _pages => [
     HomeScreen(onNavigate: _switchTab),
     const LibraryScreen(),
-    const ScannerScreen(),
+    ScannerScreen(isActive: _selectedIndex == 2),
     const PlannerScreen(),
     const FlashcardsScreen(),
     const StatusScreen(), // gallery — untouched

@@ -1,0 +1,16 @@
+fix(android): Scanner UX overhaul
+
+- Home: fix Quick Actions grid RenderFlex overflow (5.8px) by giving
+  DashboardCard more vertical room (childAspectRatio 1.6 -> 1.45).
+- Scanner: only initialize the camera while the Scanner tab is actually
+  selected (isActive flag + didUpdateWidget), instead of eagerly at app
+  launch via IndexedStack. Releases the camera the moment the user
+  switches away from the tab.
+- Scanner: wrap body content in SafeArea so the floating bottom nav
+  (rendered via Scaffold.extendBody) no longer overlaps the capture
+  button.
+- Scanner: replace the old two-tap "PDF or Images" save sheet with a
+  proper capture/import -> name -> organize -> save flow: a new
+  _SaveScanSheet lets the student name the note, pick PDF/Images, and
+  file it into an existing or newly-created folder/subject before
+  writing to disk and adding it to the Library.

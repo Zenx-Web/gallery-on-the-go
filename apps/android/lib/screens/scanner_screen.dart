@@ -11,7 +11,12 @@ import '../theme/app_theme.dart';
 import '../widgets/glass_background.dart';
 
 class ScannerScreen extends StatefulWidget {
-  const ScannerScreen({super.key});
+  const ScannerScreen({super.key, this.isActive = true});
+
+  /// Whether the Scanner tab is the one currently visible to the user. The
+  /// shell keeps every tab mounted via IndexedStack, so without this flag
+  /// the camera would turn on at app launch regardless of which tab shows.
+  final bool isActive;
 
   @override
   State<ScannerScreen> createState() => _ScannerScreenState();
@@ -32,7 +37,17 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initCamera();
+    if (widget.isActive) _initCamera();
+  }
+
+  @override
+  void didUpdateWidget(covariant ScannerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive && !oldWidget.isActive) {
+      _initCamera();
+    } else if (!widget.isActive && oldWidget.isActive) {
+      _releaseCamera();
+    }
   }
 
   @override
@@ -42,12 +57,18 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
     super.dispose();
   }
 
+  void _releaseCamera() {
+    final ctrl = _cameraCtrl;
+    _cameraCtrl = null;
+    if (mounted) setState(() => _cameraReady = false);
+    ctrl?.dispose();
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive) {
-      _cameraCtrl?.dispose();
-      if (mounted) setState(() => _cameraReady = false);
-    } else if (state == AppLifecycleState.resumed) {
+      _releaseCamera();
+    } else if (state == AppLifecycleState.resumed && widget.isActive) {
       _initCamera();
     }
   }
@@ -98,26 +119,44 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
     return dir;
   }
 
-  Future<void> _saveAsPdf() async {
+  Future<void> _saveScans(_SaveScanResult result) async {
     setState(() => _saving = true);
     try {
-      final doc = pw.Document();
-      for (final page in _pages) {
-        final bytes = await File(page.path).readAsBytes();
-        final image = pw.MemoryImage(bytes);
-        doc.addPage(pw.Page(build: (_) => pw.Center(child: pw.Image(image))));
+      final dir = await _scansDir();
+      final safeName = result.name.trim().isEmpty
+          ? 'Scan ${DateTime.now().millisecondsSinceEpoch}'
+          : result.name.trim();
+
+      if (result.asPdf) {
+        final doc = pw.Document();
+        for (final page in _pages) {
+          final bytes = await File(page.path).readAsBytes();
+          final image = pw.MemoryImage(bytes);
+          doc.addPage(pw.Page(build: (_) => pw.Center(child: pw.Image(image))));
+        }
+        final file = File(
+          '${dir.path}/${safeName}_${DateTime.now().millisecondsSinceEpoch}.pdf',
+        );
+        await file.writeAsBytes(await doc.save());
+        await StudyStorage.instance.addFileToLibrary(
+          folderName: result.folderName,
+          subjectName: result.subjectName,
+          filePath: file.path,
+        );
+      } else {
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        for (var i = 0; i < _pages.length; i++) {
+          final suffix = _pages.length > 1 ? '_${i + 1}' : '';
+          final destFile = File('${dir.path}/${safeName}_$timestamp$suffix.jpg');
+          await File(_pages[i].path).copy(destFile.path);
+          await StudyStorage.instance.addFileToLibrary(
+            folderName: result.folderName,
+            subjectName: result.subjectName,
+            filePath: destFile.path,
+          );
+        }
       }
 
-      final dir = await _scansDir();
-      final fileName = 'scan_${DateTime.now().millisecondsSinceEpoch}.pdf';
-      final file = File('${dir.path}/$fileName');
-      await file.writeAsBytes(await doc.save());
-
-      await StudyStorage.instance.addFileToLibrary(
-        folderName: 'Scanned Documents',
-        subjectName: 'Scans',
-        filePath: file.path,
-      );
       await StudyStorage.instance.incrementScansCount();
       await StudyStorage.instance.recordActivity();
 
@@ -125,39 +164,11 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
       setState(() => _pages.clear());
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Saved $pageCount page(s) as $fileName to Library')),
-      );
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  Future<void> _saveAsImages() async {
-    setState(() => _saving = true);
-    try {
-      final dir = await _scansDir();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      var saved = 0;
-      for (final page in _pages) {
-        final fileName = 'scan_${timestamp}_$saved.jpg';
-        final destFile = File('${dir.path}/$fileName');
-        await File(page.path).copy(destFile.path);
-        await StudyStorage.instance.addFileToLibrary(
-          folderName: 'Scanned Documents',
-          subjectName: 'Scans',
-          filePath: destFile.path,
-        );
-        saved++;
-      }
-      await StudyStorage.instance.incrementScansCount();
-      await StudyStorage.instance.recordActivity();
-
-      setState(() => _pages.clear());
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Saved $saved image(s) to Library')),
+        SnackBar(
+          content: Text(
+            'Saved "$safeName" ($pageCount page(s)) to ${result.folderName} → ${result.subjectName}',
+          ),
+        ),
       );
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
@@ -183,13 +194,15 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
       body: Stack(
         children: [
           const Positioned.fill(child: GlassBackground()),
-          Column(
-            children: [
-              Expanded(child: _buildViewfinder()),
-              _buildFilterRow(),
-              if (_pages.isNotEmpty) _buildPageStrip(),
-              _buildBottomActions(context),
-            ],
+          SafeArea(
+            child: Column(
+              children: [
+                Expanded(child: _buildViewfinder()),
+                _buildFilterRow(),
+                if (_pages.isNotEmpty) _buildPageStrip(),
+                _buildBottomActions(context),
+              ],
+            ),
           ),
         ],
       ),
@@ -390,47 +403,261 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
     );
   }
 
-  void _showSaveSheet(BuildContext context) {
-    showModalBottomSheet(
+  Future<void> _showSaveSheet(BuildContext context) async {
+    final folders = await StudyStorage.instance.loadFolders();
+    if (!context.mounted) return;
+    final result = await showModalBottomSheet<_SaveScanResult>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: AppColors.surfaceElevated,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
       ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(AppSpacing.xl),
+      builder: (ctx) => _SaveScanSheet(pageCount: _pages.length, initialFolders: folders),
+    );
+    if (result != null) await _saveScans(result);
+  }
+}
+
+// ─── Save-as-note flow ────────────────────────────────────────────────────────
+
+class _SaveScanResult {
+  const _SaveScanResult({
+    required this.name,
+    required this.asPdf,
+    required this.folderName,
+    required this.subjectName,
+  });
+
+  final String name;
+  final bool asPdf;
+  final String folderName;
+  final String subjectName;
+}
+
+/// The "next" step after capturing/importing pages — name the note and file
+/// it into a folder/subject before it's written to disk and added to Library.
+class _SaveScanSheet extends StatefulWidget {
+  const _SaveScanSheet({required this.pageCount, required this.initialFolders});
+
+  final int pageCount;
+  final List<FolderItem> initialFolders;
+
+  @override
+  State<_SaveScanSheet> createState() => _SaveScanSheetState();
+}
+
+class _SaveScanSheetState extends State<_SaveScanSheet> {
+  late final _nameCtrl = TextEditingController(text: _defaultName());
+  late List<FolderItem> _folders = widget.initialFolders;
+  bool _asPdf = true;
+  String? _folderName;
+  String? _subjectName;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_folders.isNotEmpty) {
+      _folderName = _folders.first.name;
+      _subjectName = _folders.first.subjects.firstOrNull?.name;
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    super.dispose();
+  }
+
+  String _defaultName() {
+    final now = DateTime.now();
+    final month = now.month.toString().padLeft(2, '0');
+    final day = now.day.toString().padLeft(2, '0');
+    return 'Scan $month/$day';
+  }
+
+  FolderItem? get _selectedFolder =>
+      _folders.where((f) => f.name == _folderName).firstOrNull;
+
+  Future<void> _createFolder() async {
+    final name = await _promptForName(context, title: 'New Folder', hint: 'Folder name (e.g. Semester 3)');
+    if (name == null || name.isEmpty) return;
+    setState(() {
+      _folders = [..._folders, FolderItem(name: name)];
+      _folderName = name;
+      _subjectName = null;
+    });
+  }
+
+  Future<void> _createSubject() async {
+    final folder = _selectedFolder;
+    if (folder == null) return;
+    final name = await _promptForName(context, title: 'New Subject', hint: 'Subject name');
+    if (name == null || name.isEmpty) return;
+    setState(() {
+      folder.subjects.add(SubjectItem(name: name));
+      _subjectName = name;
+    });
+  }
+
+  void _confirm() {
+    final folderName = _folderName;
+    final subjectName = _subjectName;
+    if (folderName == null || subjectName == null) return;
+    Navigator.pop(
+      context,
+      _SaveScanResult(
+        name: _nameCtrl.text,
+        asPdf: _asPdf,
+        folderName: folderName,
+        subjectName: subjectName,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final subjects = _selectedFolder?.subjects ?? [];
+    final canConfirm = _folderName != null && _subjectName != null;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        AppSpacing.xl,
+        AppSpacing.md,
+        AppSpacing.xl,
+        AppSpacing.xl + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Save ${_pages.length} page(s) as…',
+              'Save ${widget.pageCount} page(s) as a note',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: AppSpacing.lg),
-            ListTile(
-              leading: const Icon(Icons.picture_as_pdf, color: AppColors.accent),
-              title: const Text('PDF Document'),
-              subtitle: const Text('Saved to Library → Scanned Documents'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _saveAsPdf();
-              },
+            TextField(
+              controller: _nameCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Name',
+                hintText: 'e.g. Chapter 4 Notes',
+              ),
             ),
-            ListTile(
-              leading: const Icon(Icons.image_outlined, color: AppColors.accent),
-              title: const Text('Image Files'),
-              subtitle: const Text('Saved to Library → Scanned Documents'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _saveAsImages();
-              },
+            const SizedBox(height: AppSpacing.lg),
+            Text('Format', style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: AppSpacing.sm),
+            Row(
+              children: [
+                ChoiceChip(
+                  label: const Text('PDF Document'),
+                  selected: _asPdf,
+                  onSelected: (_) => setState(() => _asPdf = true),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                ChoiceChip(
+                  label: const Text('Image Files'),
+                  selected: !_asPdf,
+                  onSelected: (_) => setState(() => _asPdf = false),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            Text('Organize', style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: AppSpacing.sm),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: _folders.isEmpty
+                      ? const Text('No folders yet')
+                      : DropdownButtonFormField<String>(
+                          initialValue: _folderName,
+                          dropdownColor: AppColors.surfaceElevated,
+                          decoration: const InputDecoration(labelText: 'Folder'),
+                          items: _folders
+                              .map((f) => DropdownMenuItem(
+                                    value: f.name,
+                                    child: Text(f.name, overflow: TextOverflow.ellipsis),
+                                  ))
+                              .toList(),
+                          onChanged: (v) => setState(() {
+                            _folderName = v;
+                            _subjectName = _selectedFolder?.subjects.firstOrNull?.name;
+                          }),
+                        ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.create_new_folder_outlined),
+                  tooltip: 'New folder',
+                  onPressed: _createFolder,
+                ),
+              ],
+            ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: subjects.isEmpty
+                      ? Text(_selectedFolder == null ? 'Choose a folder first' : 'No subjects yet')
+                      : DropdownButtonFormField<String>(
+                          initialValue: _subjectName,
+                          dropdownColor: AppColors.surfaceElevated,
+                          decoration: const InputDecoration(labelText: 'Subject'),
+                          items: subjects
+                              .map((s) => DropdownMenuItem(
+                                    value: s.name,
+                                    child: Text(s.name, overflow: TextOverflow.ellipsis),
+                                  ))
+                              .toList(),
+                          onChanged: (v) => setState(() => _subjectName = v),
+                        ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.add),
+                  tooltip: 'New subject',
+                  onPressed: _selectedFolder == null ? null : _createSubject,
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.xl),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: AppColors.accent),
+                onPressed: canConfirm ? _confirm : null,
+                child: const Text('Save Note'),
+              ),
             ),
           ],
         ),
       ),
     );
   }
+}
+
+Future<String?> _promptForName(
+  BuildContext context, {
+  required String title,
+  required String hint,
+}) {
+  final ctrl = TextEditingController();
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: AppColors.surfaceElevated,
+      title: Text(title),
+      content: TextField(controller: ctrl, autofocus: true, decoration: InputDecoration(hintText: hint)),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+          child: const Text('Create'),
+        ),
+      ],
+    ),
+  );
 }
 
 // ─── Sub-widgets ──────────────────────────────────────────────────────────────
