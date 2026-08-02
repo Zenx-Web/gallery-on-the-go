@@ -87,6 +87,7 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: null,
         backgroundColor: AppColors.accent,
         onPressed: () => _showAddDeckDialog(context),
         icon: const Icon(Icons.add, color: Colors.white),

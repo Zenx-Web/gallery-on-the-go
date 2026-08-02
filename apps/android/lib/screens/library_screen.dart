@@ -118,6 +118,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         ],
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: null,
         backgroundColor: AppColors.accent,
         onPressed: () => _showNewFolderDialog(context),
         child: const Icon(Icons.add, color: Colors.white),

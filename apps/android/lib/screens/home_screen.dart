@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import '../services/study_storage.dart';
 import '../theme/app_theme.dart';
 import '../widgets/dashboard_card.dart';
-import 'flashcards_screen.dart';
-import 'scanner_screen.dart';
 import 'stats_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -169,14 +167,14 @@ class _HomeScreenState extends State<HomeScreen> {
         _StatChip(
           icon: Icons.task_alt,
           value: '${stats.tasksDone}/${stats.tasksTotal}',
-          label: 'tasks done',
+          label: 'tasks',
           color: AppColors.studyGreen,
         ),
         const SizedBox(width: AppSpacing.md),
         _StatChip(
           icon: Icons.style_outlined,
           value: '${stats.cardsMastered}/${stats.cardsTotal}',
-          label: 'cards mastered',
+          label: 'mastered',
           color: AppColors.accent,
         ),
       ],
@@ -201,24 +199,14 @@ class _HomeScreenState extends State<HomeScreen> {
           title: 'Scanner',
           subtitle: 'Scan a document',
           color: AppColors.accent,
-          onTap: () async {
-            await Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const ScannerScreen()),
-            );
-            _load();
-          },
+          onTap: () => widget.onNavigate?.call(2),
         ),
         DashboardCard(
           icon: Icons.style_outlined,
           title: 'Flashcards',
           subtitle: 'Review your decks',
           color: AppColors.studyAmber,
-          onTap: () async {
-            await Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const FlashcardsScreen()),
-            );
-            _load();
-          },
+          onTap: () => widget.onNavigate?.call(4),
         ),
         DashboardCard(
           icon: Icons.event_note_outlined,
@@ -355,18 +343,26 @@ class _StatChip extends StatelessWidget {
           children: [
             Icon(icon, color: color, size: 16),
             const SizedBox(width: AppSpacing.xs),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  value,
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.copyWith(fontSize: 14, color: color),
-                ),
-                Text(label, style: Theme.of(context).textTheme.bodySmall),
-              ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    value,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontSize: 14, color: color),
+                  ),
+                  Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
             ),
           ],
         ),

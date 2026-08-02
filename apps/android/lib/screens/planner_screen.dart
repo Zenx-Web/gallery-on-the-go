@@ -163,6 +163,7 @@ class _PlannerScreenState extends State<PlannerScreen>
       floatingActionButton: _tabController.index == 2
           ? null
           : FloatingActionButton(
+              heroTag: null,
               backgroundColor: AppColors.accent,
               onPressed: () => _handleAddPressed(context),
               child: const Icon(Icons.add, color: Colors.white),

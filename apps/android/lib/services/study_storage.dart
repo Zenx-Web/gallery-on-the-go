@@ -206,12 +206,7 @@ class StudyStorage {
     );
   }
 
-  List<TaskItem> _defaultTasks() => [
-        TaskItem(id: _uuid.v4(), title: 'Linear Algebra — Problem Set 3', subject: 'Mathematics', priority: 'high'),
-        TaskItem(id: _uuid.v4(), title: 'Read Thermodynamics Ch. 6', subject: 'Physics', priority: 'medium'),
-        TaskItem(id: _uuid.v4(), title: 'DBMS assignment submission', subject: 'DBMS', done: true, priority: 'high'),
-        TaskItem(id: _uuid.v4(), title: 'Revise OS scheduling algorithms', subject: 'Operating Systems', priority: 'low'),
-      ];
+  List<TaskItem> _defaultTasks() => [];
 
   // ── Exams ──────────────────────────────────────────────────────────────────
 
@@ -236,11 +231,7 @@ class StudyStorage {
     );
   }
 
-  List<ExamItem> _defaultExams() => [
-        ExamItem(id: _uuid.v4(), title: 'Mathematics Mid-term', subject: 'Mathematics', date: DateTime.now().add(const Duration(days: 5))),
-        ExamItem(id: _uuid.v4(), title: 'Physics Practical', subject: 'Physics', date: DateTime.now().add(const Duration(days: 12))),
-        ExamItem(id: _uuid.v4(), title: 'DBMS End-term', subject: 'DBMS', date: DateTime.now().add(const Duration(days: 20))),
-      ];
+  List<ExamItem> _defaultExams() => [];
 
   // ── Decks ──────────────────────────────────────────────────────────────────
 
@@ -265,27 +256,7 @@ class StudyStorage {
     );
   }
 
-  List<DeckItem> _defaultDecks() => [
-        DeckItem(
-          id: _uuid.v4(),
-          name: 'Linear Algebra',
-          subject: 'Mathematics',
-          cards: [
-            FlashCard(front: 'What is an eigenvector?', back: 'A non-zero vector v such that Av = λv for scalar λ (eigenvalue).'),
-            FlashCard(front: 'Define a linear transformation.', back: 'A mapping T: V → W that preserves addition and scalar multiplication.', mastered: true),
-            FlashCard(front: 'Determinant of a 2×2 matrix?', back: 'det([a,b;c,d]) = ad − bc', mastered: true),
-          ],
-        ),
-        DeckItem(
-          id: _uuid.v4(),
-          name: 'SQL Basics',
-          subject: 'DBMS',
-          cards: [
-            FlashCard(front: 'What is a PRIMARY KEY?', back: 'A column (or set of columns) whose values uniquely identify every row in the table.'),
-            FlashCard(front: 'INNER JOIN vs LEFT JOIN?', back: 'INNER JOIN returns only matched rows; LEFT JOIN returns all left-table rows plus matched right-table rows.', mastered: true),
-          ],
-        ),
-      ];
+  List<DeckItem> _defaultDecks() => [];
 
   // ── Folders ────────────────────────────────────────────────────────────────
 
@@ -310,18 +281,7 @@ class StudyStorage {
     );
   }
 
-  List<FolderItem> _defaultFolders() => [
-        FolderItem(name: 'Semester 1', subjects: [
-          SubjectItem(name: 'Mathematics'),
-          SubjectItem(name: 'Physics'),
-          SubjectItem(name: 'Chemistry'),
-        ]),
-        FolderItem(name: 'Semester 2', subjects: [
-          SubjectItem(name: 'Computer Science'),
-          SubjectItem(name: 'DBMS'),
-          SubjectItem(name: 'Operating Systems'),
-        ]),
-      ];
+  List<FolderItem> _defaultFolders() => [];
 
   /// Files a path into the named folder/subject, creating either if they
   /// don't exist yet — used by the scanner so saved scans show up in the
