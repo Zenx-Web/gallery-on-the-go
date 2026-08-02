@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/study_storage.dart';
 import '../theme/app_theme.dart';
 import '../widgets/search_field.dart';
+import 'subject_files_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -218,7 +219,7 @@ class _FolderTile extends StatelessWidget {
         leading: const Icon(Icons.folder_outlined, color: AppColors.accent),
         title: Text(folder.name, style: Theme.of(context).textTheme.titleMedium),
         children: [
-          ...filtered.map((s) => _SubjectTile(subject: s, onImport: () => onImportFile(s))),
+          ...filtered.map((s) => _SubjectTile(folderName: folder.name, subject: s, onImport: () => onImportFile(s))),
           ListTile(
             leading: const Icon(Icons.add, color: AppColors.onSurfaceTertiary, size: 18),
             title: Text('Add subject', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.onSurfaceTertiary)),
@@ -252,7 +253,8 @@ class _FolderTile extends StatelessWidget {
 }
 
 class _SubjectTile extends StatelessWidget {
-  const _SubjectTile({required this.subject, required this.onImport});
+  const _SubjectTile({required this.folderName, required this.subject, required this.onImport});
+  final String folderName;
   final SubjectItem subject;
   final VoidCallback onImport;
 
@@ -277,7 +279,11 @@ class _SubjectTile extends StatelessWidget {
           ),
         ],
       ),
-      onTap: () {},
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => SubjectFilesScreen(folderName: folderName, subjectName: subject.name),
+        ),
+      ),
     );
   }
 }
