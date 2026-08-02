@@ -3,7 +3,7 @@ import '../theme/app_theme.dart';
 import '../widgets/glass_background.dart';
 import 'flashcards_screen.dart';
 import 'home_screen.dart';
-import 'library_screen.dart';
+import 'notes_screen.dart';
 import 'planner_screen.dart';
 import 'scanner_screen.dart';
 import 'status_screen.dart';
@@ -23,16 +23,14 @@ class _StudyVaultShellState extends State<StudyVaultShell> {
 
   void _switchTab(int index) => setState(() => _selectedIndex = index);
 
-  // Rebuilt on every tab switch (not cached) so ScannerScreen's isActive flag
-  // stays in sync — its camera should only run while its tab is shown, even
-  // though IndexedStack keeps every tab mounted underneath.
+  // Rebuilt on every tab switch so ScannerScreen's isActive flag stays in sync.
   List<Widget> get _pages => [
     HomeScreen(onNavigate: _switchTab),
-    const LibraryScreen(),
+    const NotesScreen(),
     ScannerScreen(isActive: _selectedIndex == 2),
     const PlannerScreen(),
     const FlashcardsScreen(),
-    const StatusScreen(), // gallery — untouched
+    const StatusScreen(),
   ];
 
   @override
@@ -65,9 +63,9 @@ class _StudyVaultShellState extends State<StudyVaultShell> {
                 label: 'Home',
               ),
               NavigationDestination(
-                icon: Icon(Icons.library_books_outlined),
-                selectedIcon: Icon(Icons.library_books),
-                label: 'Library',
+                icon: Icon(Icons.menu_book_outlined),
+                selectedIcon: Icon(Icons.menu_book),
+                label: 'Notes',
               ),
               NavigationDestination(
                 icon: Icon(Icons.document_scanner_outlined),

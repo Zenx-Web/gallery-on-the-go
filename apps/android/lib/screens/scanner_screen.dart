@@ -2,18 +2,18 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:pdf/widgets.dart' as pw;
 import 'package:permission_handler/permission_handler.dart';
+import '../services/notes_storage.dart';
 import '../services/permission_gate.dart';
-import '../services/study_storage.dart';
 import '../theme/app_theme.dart';
+
+// ─── Scanner Screen ───────────────────────────────────────────────────────────
 
 class ScannerScreen extends StatefulWidget {
   const ScannerScreen({super.key, this.isActive = true});
 
-  /// Whether the Scanner tab is the one currently visible to the user. The
-  /// shell keeps every tab mounted via IndexedStack, so without this flag
+  /// Whether the Scanner tab is currently visible.
+  /// The shell keeps every tab mounted via IndexedStack, so without this flag
   /// the camera would turn on at app launch regardless of which tab shows.
   final bool isActive;
 
@@ -21,12 +21,9 @@ class ScannerScreen extends StatefulWidget {
   State<ScannerScreen> createState() => _ScannerScreenState();
 }
 
-enum _Filter { color, bw, grayscale }
-
-class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserver {
-  _Filter _selectedFilter = _Filter.color;
+class _ScannerScreenState extends State<ScannerScreen>
+    with WidgetsBindingObserver {
   final List<XFile> _pages = [];
-  bool _saving = false;
 
   CameraController? _cameraCtrl;
   bool _cameraReady = false;
@@ -74,24 +71,45 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
 
   Future<void> _initCamera() async {
     try {
-      final status = await PermissionGate.run(() => Permission.camera.request());
+      final status =
+          await PermissionGate.run(() => Permission.camera.request());
       if (!status.isGranted) {
-        if (mounted) setState(() => _cameraError = 'Camera permission denied. Enable it in Settings.');
+        if (mounted) {
+          setState(
+            () => _cameraError =
+                'Camera permission denied. Enable it in Settings.',
+          );
+        }
         return;
       }
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
-        if (mounted) setState(() => _cameraError = 'No camera found on this device.');
+        if (mounted) {
+          setState(() => _cameraError = 'No camera found on this device.');
+        }
         return;
       }
-      final ctrl = CameraController(cameras.first, ResolutionPreset.high, enableAudio: false);
+      final ctrl = CameraController(
+        cameras.first,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
       await ctrl.initialize();
-      if (!mounted) { ctrl.dispose(); return; }
-      setState(() { _cameraCtrl = ctrl; _cameraReady = true; _cameraError = null; });
+      if (!mounted) {
+        ctrl.dispose();
+        return;
+      }
+      setState(() {
+        _cameraCtrl = ctrl;
+        _cameraReady = true;
+        _cameraError = null;
+      });
     } catch (e) {
       if (mounted) setState(() => _cameraError = 'Camera error: $e');
     }
   }
+
+  // ── Actions ─────────────────────────────────────────────────────────────────
 
   Future<void> _capture() async {
     final ctrl = _cameraCtrl;
@@ -100,88 +118,50 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
       final file = await ctrl.takePicture();
       setState(() => _pages.add(file));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Capture failed: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Capture failed: $e')),
+        );
+      }
     }
   }
 
   Future<void> _importFromGallery() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: true);
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: true,
+    );
     if (result == null) return;
-    final picked = result.files.where((f) => f.path != null).map((f) => XFile(f.path!));
+    final picked = result.files
+        .where((f) => f.path != null)
+        .map((f) => XFile(f.path!));
     setState(() => _pages.addAll(picked));
   }
 
-  Future<Directory> _scansDir() async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docsDir.path}/Scans');
-    if (!await dir.exists()) await dir.create(recursive: true);
-    return dir;
-  }
+  Future<void> _goNext() async {
+    if (_pages.isEmpty) return;
 
-  // Path separators and other filesystem-reserved characters in a
-  // user-typed name would otherwise break File() construction on save.
-  String _sanitizeFileName(String raw) {
-    final trimmed = raw.trim();
-    if (trimmed.isEmpty) return 'Scan ${DateTime.now().millisecondsSinceEpoch}';
-    final cleaned = trimmed.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    return cleaned.isEmpty ? 'Scan ${DateTime.now().millisecondsSinceEpoch}' : cleaned;
-  }
+    // Push the naming screen — it returns true if saved successfully
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _NamingScreen(pages: List.unmodifiable(_pages)),
+        fullscreenDialog: true,
+      ),
+    );
 
-  Future<void> _saveScans(_SaveScanResult result) async {
-    setState(() => _saving = true);
-    try {
-      final dir = await _scansDir();
-      final safeName = _sanitizeFileName(result.name);
-
-      if (result.asPdf) {
-        final doc = pw.Document();
-        for (final page in _pages) {
-          final bytes = await File(page.path).readAsBytes();
-          final image = pw.MemoryImage(bytes);
-          doc.addPage(pw.Page(build: (_) => pw.Center(child: pw.Image(image))));
-        }
-        final file = File(
-          '${dir.path}/${safeName}_${DateTime.now().millisecondsSinceEpoch}.pdf',
-        );
-        await file.writeAsBytes(await doc.save());
-        await StudyStorage.instance.addFileToLibrary(
-          folderName: result.folderName,
-          subjectName: result.subjectName,
-          filePath: file.path,
-        );
-      } else {
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-        for (var i = 0; i < _pages.length; i++) {
-          final suffix = _pages.length > 1 ? '_${i + 1}' : '';
-          final destFile = File('${dir.path}/${safeName}_$timestamp$suffix.jpg');
-          await File(_pages[i].path).copy(destFile.path);
-          await StudyStorage.instance.addFileToLibrary(
-            folderName: result.folderName,
-            subjectName: result.subjectName,
-            filePath: destFile.path,
-          );
-        }
-      }
-
-      await StudyStorage.instance.incrementScansCount();
-      await StudyStorage.instance.recordActivity();
-
-      final pageCount = _pages.length;
+    if (saved == true && mounted) {
       setState(() => _pages.clear());
-      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Saved "$safeName" ($pageCount page(s)) to ${result.folderName} → ${result.subjectName}',
-          ),
+        const SnackBar(
+          content: Text('✅ Note saved! Find it in the Notes tab.'),
+          behavior: SnackBarBehavior.floating,
         ),
       );
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
     }
   }
+
+  // ── UI ──────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -197,19 +177,14 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
           ),
         ],
       ),
-      body: Stack(
-        children: [
-          SafeArea(
-            child: Column(
-              children: [
-                Expanded(child: _buildViewfinder()),
-                _buildFilterRow(),
-                if (_pages.isNotEmpty) _buildPageStrip(),
-                _buildBottomActions(context),
-              ],
-            ),
-          ),
-        ],
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(child: _buildViewfinder()),
+            if (_pages.isNotEmpty) _buildPageStrip(),
+            _buildBottomActions(),
+          ],
+        ),
       ),
     );
   }
@@ -217,7 +192,10 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
   Widget _buildViewfinder() {
     return Container(
       margin: const EdgeInsets.fromLTRB(
-        AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.md,
+        AppSpacing.lg,
+        0,
+        AppSpacing.lg,
+        AppSpacing.md,
       ),
       decoration: BoxDecoration(
         color: const Color(0xFF060608),
@@ -248,9 +226,17 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.no_photography_outlined, size: 48, color: AppColors.onSurfaceTertiary),
+            const Icon(
+              Icons.no_photography_outlined,
+              size: 48,
+              color: AppColors.onSurfaceTertiary,
+            ),
             const SizedBox(height: AppSpacing.md),
-            Text(_cameraError!, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
+            Text(
+              _cameraError!,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: AppSpacing.lg),
             TextButton(onPressed: _initCamera, child: const Text('Retry')),
           ],
@@ -268,10 +254,10 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
       Alignment.bottomLeft,
       Alignment.bottomRight,
     ].map((alignment) {
-      final left = alignment == Alignment.topLeft ||
-          alignment == Alignment.bottomLeft;
-      final top = alignment == Alignment.topLeft ||
-          alignment == Alignment.topRight;
+      final left =
+          alignment == Alignment.topLeft || alignment == Alignment.bottomLeft;
+      final top =
+          alignment == Alignment.topLeft || alignment == Alignment.topRight;
       return Positioned(
         left: left ? 20 : null,
         right: left ? null : 20,
@@ -293,88 +279,82 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
     }).toList();
   }
 
-  Widget _buildFilterRow() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.lg,
-        vertical: AppSpacing.sm,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: _Filter.values.map((f) {
-          final label = switch (f) {
-            _Filter.color => 'Color',
-            _Filter.bw => 'B&W',
-            _Filter.grayscale => 'Grayscale',
-          };
-          final selected = f == _selectedFilter;
-          return Padding(
-            padding: const EdgeInsets.only(right: AppSpacing.sm),
-            child: ChoiceChip(
-              label: Text(label),
-              selected: selected,
-              onSelected: (_) => setState(() => _selectedFilter = f),
-              selectedColor: AppColors.accent.withOpacity(0.2),
-              backgroundColor: AppColors.surface,
-              side: BorderSide(
-                color: selected ? AppColors.accent : AppColors.divider,
-              ),
-              labelStyle: TextStyle(
-                color: selected
-                    ? AppColors.accent
-                    : AppColors.onSurfaceSecondary,
-                fontWeight:
-                    selected ? FontWeight.w600 : FontWeight.normal,
-              ),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
   Widget _buildPageStrip() {
     return SizedBox(
-      height: 76,
+      height: 80,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
         itemCount: _pages.length,
-        itemBuilder: (context, i) => GestureDetector(
-          onLongPress: () => setState(() => _pages.removeAt(i)),
-          child: Container(
-            width: 52,
-            height: 68,
-            margin: const EdgeInsets.only(right: AppSpacing.sm),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-              border: Border.all(color: AppColors.accent),
+        itemBuilder: (context, i) => Stack(
+          children: [
+            GestureDetector(
+              onLongPress: () => setState(() => _pages.removeAt(i)),
+              child: Container(
+                width: 54,
+                height: 72,
+                margin: const EdgeInsets.only(right: AppSpacing.sm),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
+                  border: Border.all(color: AppColors.accent),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(AppRadius.sm - 1),
+                  child: Image.file(
+                    File(_pages[i].path),
+                    fit: BoxFit.cover,
+                    cacheWidth: 160,
+                  ),
+                ),
+              ),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(AppRadius.sm - 1),
-              child: Image.file(File(_pages[i].path), fit: BoxFit.cover, cacheWidth: 160),
+            // Page number badge
+            Positioned(
+              bottom: 6,
+              left: 4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '${i + 1}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildBottomActions(BuildContext context) {
+  Widget _buildBottomActions() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(
-        AppSpacing.xl, AppSpacing.md, AppSpacing.xl, AppSpacing.xl,
+        AppSpacing.xl,
+        AppSpacing.md,
+        AppSpacing.xl,
+        AppSpacing.xl,
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
+          // Import from gallery
           _ActionButton(
             icon: Icons.photo_library_outlined,
             label: 'Gallery',
-            onTap: _saving ? null : _importFromGallery,
+            onTap: _importFromGallery,
           ),
+
+          // Shutter button
           GestureDetector(
-            onTap: _saving ? null : _capture,
+            onTap: _capture,
             child: Container(
               width: 72,
               height: 72,
@@ -392,247 +372,275 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
               child: const Icon(Icons.camera_alt, color: Colors.white, size: 28),
             ),
           ),
-          _saving
-              ? const SizedBox(
-                  width: 26,
-                  height: 26,
-                  child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.accent),
+
+          // Next → (enabled only when at least 1 page captured)
+          _pages.isEmpty
+              ? const _ActionButton(
+                  icon: Icons.arrow_forward_rounded,
+                  label: 'Next',
+                  onTap: null,
                 )
               : _ActionButton(
-                  icon: Icons.save_alt_outlined,
-                  label: 'Save',
-                  onTap: _pages.isEmpty ? null : () => _showSaveSheet(context),
+                  icon: Icons.arrow_forward_rounded,
+                  label: 'Next',
+                  onTap: _goNext,
+                  accent: true,
                 ),
         ],
       ),
     );
   }
-
-  Future<void> _showSaveSheet(BuildContext context) async {
-    final folders = await StudyStorage.instance.loadFolders();
-    if (!context.mounted) return;
-    final result = await showModalBottomSheet<_SaveScanResult>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.surfaceElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-      ),
-      builder: (ctx) => _SaveScanSheet(pageCount: _pages.length, initialFolders: folders),
-    );
-    if (result != null) await _saveScans(result);
-  }
 }
 
-// ─── Save-as-note flow ────────────────────────────────────────────────────────
+// ─── Naming Screen ────────────────────────────────────────────────────────────
 
-class _SaveScanResult {
-  const _SaveScanResult({
-    required this.name,
-    required this.asPdf,
-    required this.folderName,
-    required this.subjectName,
-  });
-
-  final String name;
-  final bool asPdf;
-  final String folderName;
-  final String subjectName;
-}
-
-/// The "next" step after capturing/importing pages — name the note and file
-/// it into a folder/subject before it's written to disk and added to Library.
-class _SaveScanSheet extends StatefulWidget {
-  const _SaveScanSheet({required this.pageCount, required this.initialFolders});
-
-  final int pageCount;
-  final List<FolderItem> initialFolders;
+/// Full-screen step shown after capturing pages.
+/// Student types a Subject and Topic name then hits Save.
+class _NamingScreen extends StatefulWidget {
+  const _NamingScreen({required this.pages});
+  final List<XFile> pages;
 
   @override
-  State<_SaveScanSheet> createState() => _SaveScanSheetState();
+  State<_NamingScreen> createState() => _NamingScreenState();
 }
 
-class _SaveScanSheetState extends State<_SaveScanSheet> {
-  late final _nameCtrl = TextEditingController(text: _defaultName());
-  late List<FolderItem> _folders = widget.initialFolders;
-  bool _asPdf = true;
-  String? _folderName;
-  String? _subjectName;
+class _NamingScreenState extends State<_NamingScreen> {
+  final _subjectCtrl = TextEditingController();
+  final _topicCtrl = TextEditingController();
+  final _subjectFocus = FocusNode();
+  final _topicFocus = FocusNode();
+
+  List<String> _existingSubjects = [];
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
-    if (_folders.isNotEmpty) {
-      _folderName = _folders.first.name;
-      _subjectName = _folders.first.subjects.firstOrNull?.name;
-    }
+    _loadSubjects();
   }
 
   @override
   void dispose() {
-    _nameCtrl.dispose();
+    _subjectCtrl.dispose();
+    _topicCtrl.dispose();
+    _subjectFocus.dispose();
+    _topicFocus.dispose();
     super.dispose();
   }
 
-  String _defaultName() {
-    final now = DateTime.now();
-    final month = now.month.toString().padLeft(2, '0');
-    final day = now.day.toString().padLeft(2, '0');
-    return 'Scan $month/$day';
+  Future<void> _loadSubjects() async {
+    final subjects = await NotesStorage.loadSubjects();
+    if (mounted) setState(() => _existingSubjects = subjects);
   }
 
-  FolderItem? get _selectedFolder =>
-      _folders.where((f) => f.name == _folderName).firstOrNull;
+  bool get _canSave =>
+      _subjectCtrl.text.trim().isNotEmpty &&
+      _topicCtrl.text.trim().isNotEmpty;
 
-  Future<void> _createFolder() async {
-    final name = await _promptForName(context, title: 'New Folder', hint: 'Folder name (e.g. Semester 3)');
-    if (name == null || name.isEmpty) return;
-    setState(() {
-      _folders = [..._folders, FolderItem(name: name)];
-      _folderName = name;
-      _subjectName = null;
-    });
-  }
-
-  Future<void> _createSubject() async {
-    final folder = _selectedFolder;
-    if (folder == null) return;
-    final name = await _promptForName(context, title: 'New Subject', hint: 'Subject name');
-    if (name == null || name.isEmpty) return;
-    setState(() {
-      folder.subjects.add(SubjectItem(name: name));
-      _subjectName = name;
-    });
-  }
-
-  void _confirm() {
-    final folderName = _folderName;
-    final subjectName = _subjectName;
-    if (folderName == null || subjectName == null) return;
-    Navigator.pop(
-      context,
-      _SaveScanResult(
-        name: _nameCtrl.text,
-        asPdf: _asPdf,
-        folderName: folderName,
-        subjectName: subjectName,
-      ),
-    );
+  Future<void> _save() async {
+    if (!_canSave || _saving) return;
+    setState(() => _saving = true);
+    try {
+      await NotesStorage.saveTopic(
+        subject: _subjectCtrl.text.trim(),
+        topic: _topicCtrl.text.trim(),
+        pagePaths: widget.pages.map((p) => p.path).toList(),
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Save failed: $e')),
+        );
+      }
+      setState(() => _saving = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final subjects = _selectedFolder?.subjects ?? [];
-    final canConfirm = _folderName != null && _subjectName != null;
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        AppSpacing.xl,
-        AppSpacing.md,
-        AppSpacing.xl,
-        AppSpacing.xl + MediaQuery.of(context).viewInsets.bottom,
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('Name Your Note'),
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: () => Navigator.pop(context, false),
+        ),
       ),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        child: ListView(
+          padding: const EdgeInsets.all(AppSpacing.xl),
           children: [
+            // ── Page previews ──
             Text(
-              'Save ${widget.pageCount} page(s) as a note',
-              style: Theme.of(context).textTheme.titleMedium,
+              '${widget.pages.length} page${widget.pages.length == 1 ? '' : 's'} ready to save',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppColors.onSurfaceSecondary,
+                  ),
             ),
-            const SizedBox(height: AppSpacing.lg),
-            TextField(
-              controller: _nameCtrl,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Name',
-                hintText: 'e.g. Chapter 4 Notes',
+            const SizedBox(height: AppSpacing.sm),
+            SizedBox(
+              height: 100,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: widget.pages.length,
+                itemBuilder: (_, i) => Container(
+                  width: 72,
+                  height: 96,
+                  margin: const EdgeInsets.only(right: AppSpacing.sm),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                    border: Border.all(color: AppColors.divider),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(AppRadius.sm - 1),
+                    child: Image.file(
+                      File(widget.pages[i].path),
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: AppSpacing.lg),
-            Text('Format', style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                ChoiceChip(
-                  label: const Text('PDF Document'),
-                  selected: _asPdf,
-                  onSelected: (_) => setState(() => _asPdf = true),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                ChoiceChip(
-                  label: const Text('Image Files'),
-                  selected: !_asPdf,
-                  onSelected: (_) => setState(() => _asPdf = false),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            Text('Organize', style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: _folders.isEmpty
-                      ? const Text('No folders yet')
-                      : DropdownButtonFormField<String>(
-                          initialValue: _folderName,
-                          dropdownColor: AppColors.surfaceElevated,
-                          decoration: const InputDecoration(labelText: 'Folder'),
-                          items: _folders
-                              .map((f) => DropdownMenuItem(
-                                    value: f.name,
-                                    child: Text(f.name, overflow: TextOverflow.ellipsis),
-                                  ))
-                              .toList(),
-                          onChanged: (v) => setState(() {
-                            _folderName = v;
-                            _subjectName = _selectedFolder?.subjects.firstOrNull?.name;
-                          }),
-                        ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.create_new_folder_outlined),
-                  tooltip: 'New folder',
-                  onPressed: _createFolder,
-                ),
-              ],
-            ),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: subjects.isEmpty
-                      ? Text(_selectedFolder == null ? 'Choose a folder first' : 'No subjects yet')
-                      : DropdownButtonFormField<String>(
-                          initialValue: _subjectName,
-                          dropdownColor: AppColors.surfaceElevated,
-                          decoration: const InputDecoration(labelText: 'Subject'),
-                          items: subjects
-                              .map((s) => DropdownMenuItem(
-                                    value: s.name,
-                                    child: Text(s.name, overflow: TextOverflow.ellipsis),
-                                  ))
-                              .toList(),
-                          onChanged: (v) => setState(() => _subjectName = v),
-                        ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.add),
-                  tooltip: 'New subject',
-                  onPressed: _selectedFolder == null ? null : _createSubject,
-                ),
-              ],
-            ),
+
             const SizedBox(height: AppSpacing.xl),
+            const Divider(),
+            const SizedBox(height: AppSpacing.xl),
+
+            // ── Subject field ──
+            Text(
+              'Subject',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            TextField(
+              controller: _subjectCtrl,
+              focusNode: _subjectFocus,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                hintText: 'e.g. Mathematics, Physics, History',
+                prefixIcon: const Icon(Icons.menu_book_outlined),
+                filled: true,
+                fillColor: AppColors.surface,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  borderSide: const BorderSide(color: AppColors.divider),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  borderSide: const BorderSide(color: AppColors.divider),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  borderSide: const BorderSide(color: AppColors.accent),
+                ),
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _topicFocus.requestFocus(),
+            ),
+
+            // Existing subject chips (quick-pick)
+            if (_existingSubjects.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Wrap(
+                spacing: AppSpacing.sm,
+                children: _existingSubjects.map((s) {
+                  final selected = _subjectCtrl.text.trim() == s;
+                  return ActionChip(
+                    label: Text(s),
+                    onPressed: () {
+                      _subjectCtrl.text = s;
+                      setState(() {});
+                      _topicFocus.requestFocus();
+                    },
+                    backgroundColor: selected
+                        ? AppColors.accent.withOpacity(0.2)
+                        : AppColors.surface,
+                    side: BorderSide(
+                      color: selected ? AppColors.accent : AppColors.divider,
+                    ),
+                    labelStyle: TextStyle(
+                      color: selected
+                          ? AppColors.accent
+                          : AppColors.onSurfaceSecondary,
+                      fontWeight:
+                          selected ? FontWeight.w600 : FontWeight.normal,
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+
+            const SizedBox(height: AppSpacing.xl),
+
+            // ── Topic field ──
+            Text(
+              'Topic / Chapter',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            TextField(
+              controller: _topicCtrl,
+              focusNode: _topicFocus,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: InputDecoration(
+                hintText: 'e.g. Chapter 3 – Algebra, Waves & Sound',
+                prefixIcon: const Icon(Icons.bookmark_outline),
+                filled: true,
+                fillColor: AppColors.surface,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  borderSide: const BorderSide(color: AppColors.divider),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  borderSide: const BorderSide(color: AppColors.divider),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  borderSide: const BorderSide(color: AppColors.accent),
+                ),
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _save(),
+            ),
+
+            const SizedBox(height: AppSpacing.xxxl),
+
+            // ── Save button ──
             SizedBox(
               width: double.infinity,
-              child: FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: AppColors.accent),
-                onPressed: canConfirm ? _confirm : null,
-                child: const Text('Save Note'),
+              height: 52,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: _canSave
+                      ? AppColors.accent
+                      : AppColors.onSurfaceTertiary,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                  ),
+                ),
+                onPressed: _canSave && !_saving ? _save : null,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.check_rounded, color: Colors.white),
+                label: Text(
+                  _saving ? 'Saving…' : 'Save Note',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ),
           ],
@@ -642,58 +650,45 @@ class _SaveScanSheetState extends State<_SaveScanSheet> {
   }
 }
 
-Future<String?> _promptForName(
-  BuildContext context, {
-  required String title,
-  required String hint,
-}) {
-  final ctrl = TextEditingController();
-  return showDialog<String>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      backgroundColor: AppColors.surfaceElevated,
-      title: Text(title),
-      content: TextField(controller: ctrl, autofocus: true, decoration: InputDecoration(hintText: hint)),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-          child: const Text('Create'),
-        ),
-      ],
-    ),
-  );
-}
-
 // ─── Sub-widgets ──────────────────────────────────────────────────────────────
 
 class _ActionButton extends StatelessWidget {
-  const _ActionButton({required this.icon, required this.label, this.onTap});
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    this.onTap,
+    this.accent = false,
+  });
 
   final IconData icon;
   final String label;
   final VoidCallback? onTap;
+  final bool accent;
 
   @override
   Widget build(BuildContext context) {
     final enabled = onTap != null;
+    final color = enabled
+        ? (accent ? AppColors.accent : AppColors.onSurface)
+        : AppColors.onSurfaceTertiary;
+
     return GestureDetector(
       onTap: onTap,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            icon,
-            color: enabled ? AppColors.onSurface : AppColors.onSurfaceTertiary,
-            size: 26,
-          ),
+          Icon(icon, color: color, size: 26),
           const SizedBox(height: 4),
           Text(
             label,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: enabled
-                      ? AppColors.onSurfaceSecondary
+                      ? (accent
+                          ? AppColors.accent
+                          : AppColors.onSurfaceSecondary)
                       : AppColors.onSurfaceTertiary,
+                  fontWeight:
+                      accent ? FontWeight.w600 : FontWeight.normal,
                 ),
           ),
         ],
