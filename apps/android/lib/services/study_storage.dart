@@ -207,6 +207,42 @@ class FolderItem {
       );
 }
 
+/// A single file entry that was recently saved — used to populate the
+/// "Recent Notes" section on Home and the Library's Recent tab.
+class RecentFileEntry {
+  RecentFileEntry({
+    required this.filePath,
+    required this.fileName,
+    required this.subjectName,
+    required this.folderName,
+    required this.savedAt,
+  });
+
+  final String filePath;
+  final String fileName;
+  final String subjectName;
+  final String folderName;
+  final DateTime savedAt;
+
+  bool get isPdf => fileName.toLowerCase().endsWith('.pdf');
+
+  Map<String, dynamic> toJson() => {
+        'filePath': filePath,
+        'fileName': fileName,
+        'subjectName': subjectName,
+        'folderName': folderName,
+        'savedAt': savedAt.toIso8601String(),
+      };
+
+  factory RecentFileEntry.fromJson(Map<String, dynamic> j) => RecentFileEntry(
+        filePath: j['filePath'] as String,
+        fileName: j['fileName'] as String,
+        subjectName: j['subjectName'] as String,
+        folderName: j['folderName'] as String,
+        savedAt: DateTime.parse(j['savedAt'] as String),
+      );
+}
+
 // ─── Storage service (singleton) ─────────────────────────────────────────────
 
 class StudyStorage {
@@ -219,6 +255,8 @@ class StudyStorage {
   static const _foldersKey = 'sv_folders';
   static const _examsKey = 'sv_exams';
   static const _timetableKey = 'sv_timetable';
+  static const _recentFilesKey = 'sv_recent_files';
+  static const _maxRecentFiles = 20;
 
   String get newId => _uuid.v4();
 
@@ -369,6 +407,57 @@ class StudyStorage {
     subject.filePaths.add(filePath);
     subject.fileCount = subject.filePaths.length;
     await saveFolders(folders);
+
+    // Record in the recents list so Home / Library Recent tab stay current.
+    final fileName = filePath.split(RegExp(r'[\\/]')).last;
+    await recordRecentFile(RecentFileEntry(
+      filePath: filePath,
+      fileName: fileName,
+      subjectName: subjectName,
+      folderName: folderName,
+      savedAt: DateTime.now(),
+    ));
+  }
+
+  // ── Recent Files ───────────────────────────────────────────────────────────
+
+  /// Returns recently saved files, newest first.
+  Future<List<RecentFileEntry>> loadRecentFiles() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_recentFilesKey);
+      if (raw == null) return [];
+      return (jsonDecode(raw) as List)
+          .map((e) => RecentFileEntry.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Prepends [entry] to the recent-files list, capping it at [_maxRecentFiles].
+  Future<void> recordRecentFile(RecentFileEntry entry) async {
+    final list = await loadRecentFiles();
+    // Remove any stale entry for the same path before prepending.
+    list.removeWhere((e) => e.filePath == entry.filePath);
+    list.insert(0, entry);
+    final capped = list.take(_maxRecentFiles).toList();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _recentFilesKey,
+      jsonEncode(capped.map((e) => e.toJson()).toList()),
+    );
+  }
+
+  /// Removes a single entry from the recents list (e.g. after file deletion).
+  Future<void> removeRecentFile(String filePath) async {
+    final list = await loadRecentFiles();
+    list.removeWhere((e) => e.filePath == filePath);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _recentFilesKey,
+      jsonEncode(list.map((e) => e.toJson()).toList()),
+    );
   }
 
   // ── Activity tracking (streak + weekly chart) ─────────────────────────────

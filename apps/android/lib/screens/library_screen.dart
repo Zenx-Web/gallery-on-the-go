@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../services/study_storage.dart';
@@ -17,6 +19,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   late final TabController _tabController;
   String _query = '';
   List<FolderItem> _folders = [];
+  List<RecentFileEntry> _recentFiles = [];
   bool _loading = true;
 
   @override
@@ -34,7 +37,12 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   Future<void> _loadFolders() async {
     final folders = await StudyStorage.instance.loadFolders();
-    if (mounted) setState(() { _folders = folders; _loading = false; });
+    final recentFiles = await StudyStorage.instance.loadRecentFiles();
+    if (mounted) setState(() {
+      _folders = folders;
+      _recentFiles = recentFiles;
+      _loading = false;
+    });
   }
 
   Future<void> _save() => StudyStorage.instance.saveFolders(_folders);
@@ -112,7 +120,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               children: [
                 _buildAllTab(),
                 _buildEmptyState(Icons.star_border, 'No favorites yet'),
-                _buildEmptyState(Icons.history, 'No recent files'),
+                _buildRecentTab(),
               ],
             ),
           ),
@@ -138,6 +146,78 @@ class _LibraryScreenState extends State<LibraryScreen>
         onAddSubject: (name) => _addSubject(_folders[i], name),
         onImportFile: _importFile,
       ),
+    );
+  }
+
+  Widget _buildRecentTab() {
+    if (_recentFiles.isEmpty) {
+      return _buildEmptyState(Icons.history, 'No recent files yet');
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      itemCount: _recentFiles.length,
+      separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
+      itemBuilder: (context, i) {
+        final entry = _recentFiles[i];
+        final diff = DateTime.now().difference(entry.savedAt);
+        final timeLabel = diff.inMinutes < 60
+            ? '${diff.inMinutes}m ago'
+            : diff.inHours < 24
+                ? '${diff.inHours}h ago'
+                : diff.inDays == 1
+                    ? 'Yesterday'
+                    : '${entry.savedAt.day}/${entry.savedAt.month}/${entry.savedAt.year}';
+        return GestureDetector(
+          onTap: () {
+            if (entry.isPdf) {
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => PdfViewerScreen(filePath: entry.filePath, title: entry.fileName),
+              ));
+            } else {
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => _RecentImageViewer(path: entry.filePath),
+              ));
+            }
+          },
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              border: Border.all(color: AppColors.divider),
+            ),
+            child: ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: (entry.isPdf ? AppColors.studyAmber : AppColors.accent).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
+                ),
+                child: Icon(
+                  entry.isPdf ? Icons.picture_as_pdf : Icons.image_outlined,
+                  color: entry.isPdf ? AppColors.studyAmber : AppColors.accent,
+                  size: 18,
+                ),
+              ),
+              title: Text(
+                entry.fileName,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              subtitle: Text(
+                '${entry.subjectName} · ${entry.folderName}',
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              trailing: Text(
+                timeLabel,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.onSurfaceTertiary,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -284,6 +364,30 @@ class _SubjectTile extends StatelessWidget {
           builder: (_) => SubjectFilesScreen(folderName: folderName, subjectName: subject.name),
         ),
       ),
+    );
+  }
+}
+
+/// Lightweight image viewer used by the Library's Recent tab.
+class _RecentImageViewer extends StatelessWidget {
+  const _RecentImageViewer({required this.path});
+  final String path;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.share_outlined),
+            onPressed: () => Share.shareXFiles([XFile(path)]),
+          ),
+        ],
+      ),
+      body: Center(child: InteractiveViewer(maxScale: 5, child: Image.file(File(path)))),
     );
   }
 }

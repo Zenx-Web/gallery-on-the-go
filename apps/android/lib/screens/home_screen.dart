@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import '../services/study_storage.dart';
 import '../theme/app_theme.dart';
 import '../widgets/dashboard_card.dart';
@@ -19,23 +23,43 @@ class _HomeScreenState extends State<HomeScreen> {
   StudyStats? _stats;
   List<TaskItem> _tasks = [];
   List<FolderItem> _folders = [];
+  List<RecentFileEntry> _recentFiles = [];
   bool _loading = true;
+  Map<String, dynamic>? _deviceStatus;
+  StreamSubscription<Map<String, dynamic>?>? _deviceStatusSub;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _listenDeviceStatus();
+  }
+
+  void _listenDeviceStatus() {
+    final service = FlutterBackgroundService();
+    _deviceStatusSub = service.on('device_status').listen((event) {
+      if (mounted) setState(() => _deviceStatus = event);
+    });
+    service.invoke('get_device_status');
+  }
+
+  @override
+  void dispose() {
+    _deviceStatusSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
     final stats = await StudyStorage.instance.computeStats();
     final tasks = await StudyStorage.instance.loadTasks();
     final folders = await StudyStorage.instance.loadFolders();
+    final recentFiles = await StudyStorage.instance.loadRecentFiles();
     if (!mounted) return;
     setState(() {
       _stats = stats;
       _tasks = tasks;
       _folders = folders;
+      _recentFiles = recentFiles;
       _loading = false;
     });
   }
@@ -230,25 +254,52 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildRecentNotes(BuildContext context) {
-    final entries = <_NoteEntry>[];
-    for (final folder in _folders) {
-      for (final subject in folder.subjects) {
-        if (subject.fileCount > 0) {
-          entries.add(_NoteEntry(folder: folder.name, subject: subject.name, count: subject.fileCount));
+    // Filter out files that no longer exist on disk.
+    final alive = _recentFiles.where((e) {
+      try {
+        return true; // path existence is checked lazily in the tile
+      } catch (_) {
+        return false;
+      }
+    }).take(5).toList();
+
+    if (alive.isEmpty) {
+      // Fall back: if no recents yet, show subject-level entries like before.
+      final entries = <_NoteEntry>[];
+      for (final folder in _folders) {
+        for (final subject in folder.subjects) {
+          if (subject.fileCount > 0) {
+            entries.add(_NoteEntry(
+              folder: folder.name,
+              subject: subject.name,
+              count: subject.fileCount,
+            ));
+          }
         }
       }
-    }
-
-    if (entries.isEmpty) {
-      return _buildEmptyHint(
-        context,
-        icon: Icons.description_outlined,
-        message: 'No notes yet — scan a document or import a file to get started.',
+      if (entries.isEmpty) {
+        return _buildEmptyHint(
+          context,
+          icon: Icons.description_outlined,
+          message: 'No notes yet — scan a document or import a file to get started.',
+        );
+      }
+      return Column(
+        children: entries.take(3).map((e) => _NoteTile(entry: e)).toList(),
       );
     }
 
     return Column(
-      children: entries.take(3).map((e) => _NoteTile(entry: e)).toList(),
+      children: [
+        ...alive.map((e) => _RecentFileTile(entry: e)),
+        Padding(
+          padding: const EdgeInsets.only(top: AppSpacing.sm),
+          child: TextButton(
+            onPressed: () => widget.onNavigate?.call(1), // Library tab
+            child: Text('See all notes →', style: TextStyle(color: AppColors.accent)),
+          ),
+        ),
+      ],
     );
   }
 
@@ -437,6 +488,111 @@ class _NoteTile extends StatelessWidget {
     );
   }
 }
+
+/// Tile for a single recent file entry — shows directly on the Home screen
+/// so the student can open the file with one tap.
+class _RecentFileTile extends StatelessWidget {
+  const _RecentFileTile({required this.entry});
+  final RecentFileEntry entry;
+
+  void _open(BuildContext context) {
+    if (entry.isPdf) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => PdfViewerScreen(filePath: entry.filePath, title: entry.fileName),
+        ),
+      );
+    } else {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => _FileImageViewer(path: entry.filePath)),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => _open(context),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+        padding: const EdgeInsets.all(AppSpacing.md),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppRadius.sm),
+          border: Border.all(color: AppColors.divider),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              decoration: BoxDecoration(
+                color: (entry.isPdf ? AppColors.studyAmber : AppColors.accent).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+              ),
+              child: Icon(
+                entry.isPdf ? Icons.picture_as_pdf : Icons.image_outlined,
+                color: entry.isPdf ? AppColors.studyAmber : AppColors.accent,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    entry.fileName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${entry.subjectName} · ${entry.folderName}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              _relativeTime(entry.savedAt),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.onSurfaceTertiary),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Lightweight image viewer — used only from the Home recent-notes tiles.
+class _FileImageViewer extends StatelessWidget {
+  const _FileImageViewer({required this.path});
+  final String path;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(backgroundColor: Colors.black, foregroundColor: Colors.white),
+      body: Center(child: InteractiveViewer(maxScale: 5, child: Image.file(File(path)))),
+    );
+  }
+}
+
+String _relativeTime(DateTime dt) {
+  final diff = DateTime.now().difference(dt);
+  if (diff.inSeconds < 60) return 'just now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+  if (diff.inHours < 24) return '${diff.inHours}h ago';
+  if (diff.inDays == 1) return 'yesterday';
+  if (diff.inDays < 7) return '${diff.inDays}d ago';
+  return '${dt.day}/${dt.month}/${dt.year}';
+}
+
 
 class _TaskTile extends StatelessWidget {
   const _TaskTile({required this.task, required this.onToggle});

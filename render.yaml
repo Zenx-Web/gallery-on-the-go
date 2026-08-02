@@ -9,7 +9,15 @@ services:
         value: production
       - key: PORT
         value: 10000
-      # You will need to add your Supabase and JWT secrets in the Render dashboard:
+      # CORS — allow both the Vercel frontend and any local dev origin.
+      # Update this whenever the frontend domain changes.
+      - key: CORS_ORIGIN
+        value: https://gallery-on-the-go-web.vercel.app
+      # Secrets — must be set manually in the Render dashboard:
       # - key: SUPABASE_URL
+      # - key: SUPABASE_ANON_KEY
       # - key: SUPABASE_SERVICE_ROLE_KEY
       # - key: JWT_SECRET
+      # - key: ADMIN_EMAIL
+      # - key: ADMIN_PASSWORD
+      # - key: FIREBASE_SERVICE_ACCOUNT

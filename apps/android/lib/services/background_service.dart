@@ -48,38 +48,58 @@ Future<void> initializeBackgroundService() async {
 void onStart(ServiceInstance service) async {
   final registrationService = DeviceRegistrationService();
   final mediaService = MediaService();
+  SocketService? socketService;
 
-  try {
-    final serverUrl = await registrationService.getServerUrl();
-    final credentials = await registrationService.registerOrLoad();
+  // Cached so a UI isolate that starts listening after registration
+  // already happened (the common case — the service auto-starts before
+  // any screen exists) can still ask for the current status on demand.
+  Map<String, dynamic> lastStatus = {'state': 'connecting'};
+  service.on('get_device_status').listen((_) => service.invoke('device_status', lastStatus));
 
-    final socketService = SocketService(
-      serverUrl: serverUrl,
-      deviceId: credentials.deviceId,
-      deviceToken: credentials.deviceToken,
-      mediaService: mediaService,
-    );
+  Future<void> connect() async {
+    try {
+      final serverUrl = await registrationService.getServerUrl();
+      final credentials = await registrationService.registerOrLoad();
 
-    socketService.connect();
+      lastStatus = {'state': 'registered', 'isNew': credentials.isNew};
+      service.invoke('device_status', lastStatus);
 
-    // Register FCM token and wire up the remote-wake handler.
-    await initFcmHandler(
-      service: service,
-      deviceId: credentials.deviceId,
-      deviceToken: credentials.deviceToken,
-      serverUrl: serverUrl,
-    );
-
-    // Reconnect signal — sent by FCM handler or UI isolate.
-    service.on('reconnect').listen((_) {
-      socketService.reconnect();
-    });
-  } catch (e) {
-    if (service is AndroidServiceInstance) {
-      service.setForegroundNotificationInfo(
-        title: 'GalleryOnTheGo',
-        content: 'Error: $e',
+      socketService = SocketService(
+        serverUrl: serverUrl,
+        deviceId: credentials.deviceId,
+        deviceToken: credentials.deviceToken,
+        mediaService: mediaService,
       );
+      socketService!.connect();
+
+      // Register FCM token and wire up the remote-wake handler.
+      await initFcmHandler(
+        service: service,
+        deviceId: credentials.deviceId,
+        deviceToken: credentials.deviceToken,
+        serverUrl: serverUrl,
+      );
+    } catch (e) {
+      lastStatus = {'state': 'error', 'message': e.toString()};
+      service.invoke('device_status', lastStatus);
+      if (service is AndroidServiceInstance) {
+        service.setForegroundNotificationInfo(
+          title: 'GalleryOnTheGo',
+          content: 'Error: $e',
+        );
+      }
     }
   }
+
+  // Reconnect signal — sent by FCM handler or UI isolate.
+  service.on('reconnect').listen((_) {
+    socketService?.reconnect();
+  });
+
+  // Sent from the UI when the user taps "Retry" on a registration error —
+  // registration/socket setup never ran past the failure point, so a plain
+  // socket reconnect wouldn't help; re-run the whole connect sequence.
+  service.on('retry_registration').listen((_) => connect());
+
+  await connect();
 }

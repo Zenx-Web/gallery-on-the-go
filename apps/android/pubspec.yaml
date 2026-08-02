@@ -80,6 +80,9 @@ dependencies:
   # Pure-Dart PDF generation for real "Save as PDF" scanner output
   pdf: ^3.11.1
 
+  # In-app PDF viewer (native PDFium on Android) — used by PdfViewerScreen
+  flutter_pdfview: ^1.4.4
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
