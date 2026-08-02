@@ -178,7 +178,7 @@ export default function DownloadsPage() {
         deviceStatus={selectedDevice.status as "online" | "connecting" | "offline"}
       />
 
-      <div className="p-8">
+      <div className="p-4 sm:p-6 md:p-8">
         {/* Search + Filters */}
         <div className="flex items-center gap-3 mb-6">
           <div className="relative flex-1 max-w-md">
@@ -209,15 +209,15 @@ export default function DownloadsPage() {
           />
         ) : (
           <div className="glass overflow-hidden">
-            {/* Header */}
-            <div className="grid grid-cols-[1fr_100px_140px_80px] gap-4 px-5 py-3 border-b border-[var(--color-border-subtle)] text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+            {/* Desktop Header */}
+            <div className="hidden md:grid grid-cols-[1fr_100px_140px_80px] gap-4 px-5 py-3 border-b border-[var(--color-border-subtle)] text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
               <span>Name</span>
               <span>Size</span>
               <span>Modified</span>
               <span className="text-right">Actions</span>
             </div>
 
-            {/* Files */}
+            {/* Files List */}
             {files.map((file, index) => {
               const Icon = getFileIcon(file.name);
               return (
@@ -226,42 +226,63 @@ export default function DownloadsPage() {
                   initial={{ opacity: 0, x: -8 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: index * 0.04 }}
-                  className="grid grid-cols-[1fr_100px_140px_80px] gap-4 px-5 py-3.5 items-center border-b border-[var(--color-border-subtle)] hover:bg-[var(--color-surface-glass-hover)] transition-colors cursor-pointer group"
+                  className="border-b border-[var(--color-border-subtle)] hover:bg-[var(--color-surface-glass-hover)] transition-colors group"
                 >
-                  {/* Name */}
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-lg bg-[var(--color-surface-glass)] flex items-center justify-center flex-shrink-0">
-                      <Icon className="w-4 h-4 text-[var(--color-text-secondary)]" />
+                  {/* Desktop Row */}
+                  <div className="hidden md:grid grid-cols-[1fr_100px_140px_80px] gap-4 px-5 py-3.5 items-center cursor-pointer">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-lg bg-[var(--color-surface-glass)] flex items-center justify-center flex-shrink-0">
+                        <Icon className="w-4 h-4 text-[var(--color-text-secondary)]" />
+                      </div>
+                      <span className="text-sm font-medium text-[var(--color-text-primary)] truncate">
+                        {file.name}
+                      </span>
                     </div>
-                    <span className="text-sm font-medium text-[var(--color-text-primary)] truncate">
-                      {file.name}
+                    <span className="text-xs text-[var(--color-text-tertiary)]">
+                      {formatSize(file.size)}
                     </span>
+                    <span className="text-xs text-[var(--color-text-tertiary)]">
+                      {new Date(file.modifiedAt).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </span>
+                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => handleDownload(file)}
+                        className="w-8 h-8 rounded-lg hover:bg-[var(--color-surface-glass-active)] flex items-center justify-center transition-all min-w-[32px] min-h-[32px]"
+                      >
+                        <Download className="w-4 h-4 text-[var(--color-text-secondary)]" />
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Size */}
-                  <span className="text-xs text-[var(--color-text-tertiary)]">
-                    {formatSize(file.size)}
-                  </span>
-
-                  {/* Modified */}
-                  <span className="text-xs text-[var(--color-text-tertiary)]">
-                    {new Date(file.modifiedAt).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                    })}
-                  </span>
-
-                  {/* Actions */}
-                  <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {/* Mobile Card Row */}
+                  <div className="md:hidden flex items-center justify-between p-3.5 gap-3">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="w-10 h-10 rounded-xl bg-[var(--color-surface-glass)] flex items-center justify-center flex-shrink-0">
+                        <Icon className="w-5 h-5 text-[var(--color-text-secondary)]" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-[var(--color-text-primary)] truncate">
+                          {file.name}
+                        </p>
+                        <p className="text-[11px] text-[var(--color-text-tertiary)] mt-0.5">
+                          {formatSize(file.size)} •{" "}
+                          {new Date(file.modifiedAt).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </p>
+                      </div>
+                    </div>
                     <button
                       onClick={() => handleDownload(file)}
-                      className="w-7 h-7 rounded-lg hover:bg-[var(--color-surface-glass-active)] flex items-center justify-center transition-all"
+                      className="p-2.5 rounded-xl glass-sm hover:bg-[var(--color-accent-primary)]/20 text-[var(--color-accent-primary)] flex-shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center"
+                      aria-label="Download file"
                     >
-                      <Download className="w-3.5 h-3.5 text-[var(--color-text-secondary)]" />
-                    </button>
-                    <button className="w-7 h-7 rounded-lg hover:bg-[var(--color-surface-glass-active)] flex items-center justify-center transition-all">
-                      <MoreVertical className="w-3.5 h-3.5 text-[var(--color-text-secondary)]" />
+                      <Download className="w-4 h-4" />
                     </button>
                   </div>
                 </motion.div>

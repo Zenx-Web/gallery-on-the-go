@@ -50,7 +50,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
+    <div className="min-h-screen flex items-center justify-center px-4 py-8">
       {/* Decorative Orbs */}
       <div className="fixed top-20 left-20 w-72 h-72 rounded-full bg-[var(--color-accent-primary)]/8 blur-[100px]" />
       <div className="fixed bottom-20 right-20 w-96 h-96 rounded-full bg-[var(--color-accent-secondary)]/6 blur-[120px]" />
@@ -80,7 +80,7 @@ export default function LoginPage() {
         </div>
 
         {/* Login Form */}
-        <div className="glass-strong p-8">
+        <div className="glass-strong p-6 sm:p-8">
           <form onSubmit={handleLogin} className="space-y-5">
             {/* Email */}
             <div>

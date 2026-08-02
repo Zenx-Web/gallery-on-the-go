@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 import '../services/study_storage.dart';
 import '../theme/app_theme.dart';
 import '../widgets/search_field.dart';

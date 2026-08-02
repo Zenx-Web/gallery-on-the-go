@@ -652,9 +652,9 @@ export default function GalleryPage() {
         deviceStatus={selectedDevice.status as "online" | "connecting" | "offline"}
       />
 
-      <div className="p-8">
+      <div className="p-4 sm:p-6 md:p-8">
         {/* Toolbar */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
           <div className="flex items-center gap-3">
             {currentFolder && (
               <motion.button

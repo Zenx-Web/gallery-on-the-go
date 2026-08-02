@@ -10,7 +10,7 @@ import TopBar from "@/components/TopBar";
 import DeviceCard from "@/components/DeviceCard";
 import EmptyState from "@/components/EmptyState";
 import { useDevices } from "@/contexts/DeviceContext";
-import { Smartphone, RefreshCw, Trash2, Bell } from "lucide-react";
+import { Smartphone, RefreshCw, Trash2, Bell, HardDrive } from "lucide-react";
 
 export default function DevicesPage() {
   const router = useRouter();
@@ -33,7 +33,7 @@ export default function DevicesPage() {
         deviceStatus={selectedDevice?.status as "online" | "connecting" | "offline" | undefined}
       />
 
-      <div className="p-8 space-y-6">
+      <div className="p-4 sm:p-6 md:p-8 space-y-6">
         {/* Actions */}
         <div className="flex items-center gap-3">
           <button className="btn-primary" onClick={() => refresh()} disabled={loading}>
@@ -85,20 +85,24 @@ export default function DevicesPage() {
               <motion.div
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="glass p-6"
+                className="glass p-5 md:p-6"
               >
                 <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">
                   Selected Device Actions
                 </h3>
-                <div className="flex items-center gap-3">
-                  <button className="btn-primary" onClick={() => router.push("/gallery")}>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button className="btn-primary py-2 px-3.5 text-xs sm:text-sm" onClick={() => router.push("/gallery")}>
                     Browse Gallery
                   </button>
-                  <button className="btn-ghost" onClick={() => router.push("/downloads")}>
+                  <button className="btn-ghost py-2 px-3.5 text-xs sm:text-sm" onClick={() => router.push("/downloads")}>
                     Browse Downloads
                   </button>
+                  <button className="btn-ghost py-2 px-3.5 text-xs sm:text-sm flex items-center gap-1.5" onClick={() => router.push("/folders")}>
+                    <HardDrive className="w-4 h-4" />
+                    Browse Folders
+                  </button>
                   <button
-                    className="btn-ghost text-red-400 border-red-500/20 hover:bg-red-500/10 hover:text-red-300 ml-auto"
+                    className="btn-ghost py-2 px-3.5 text-xs sm:text-sm text-red-400 border-red-500/20 hover:bg-red-500/10 hover:text-red-300 sm:ml-auto"
                     onClick={() => handleRemove(selectedDevice.id)}
                   >
                     <Trash2 className="w-4 h-4" />

@@ -8,8 +8,24 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
+import MobileBottomNav from "@/components/MobileBottomNav";
 import { DeviceProvider } from "@/contexts/DeviceContext";
+import { MobileNavProvider, useMobileNav } from "@/contexts/MobileNavContext";
 import { disconnectClientSocket } from "@/lib/socket";
+
+function DashboardContent({ children }: { children: React.ReactNode }) {
+  const { isMobileMenuOpen, closeMobileMenu } = useMobileNav();
+
+  return (
+    <div className="flex min-h-screen flex-col md:flex-row">
+      <Sidebar isOpen={isMobileMenuOpen} onClose={closeMobileMenu} />
+      <main className="flex-1 md:ml-[260px] ml-0 min-h-screen overflow-x-hidden pb-20 md:pb-0">
+        {children}
+      </main>
+      <MobileBottomNav />
+    </div>
+  );
+}
 
 export default function DashboardLayout({
   children,
@@ -64,12 +80,9 @@ export default function DashboardLayout({
 
   return (
     <DeviceProvider>
-      <div className="flex min-h-screen">
-        <Sidebar />
-        <main className="flex-1 ml-[260px] min-h-screen overflow-x-hidden">
-          {children}
-        </main>
-      </div>
+      <MobileNavProvider>
+        <DashboardContent>{children}</DashboardContent>
+      </MobileNavProvider>
     </DeviceProvider>
   );
 }

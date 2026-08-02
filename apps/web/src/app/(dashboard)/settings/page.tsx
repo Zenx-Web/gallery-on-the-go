@@ -33,13 +33,13 @@ export default function SettingsPage() {
         deviceStatus={selectedDevice?.status as "online" | "connecting" | "offline" | undefined}
       />
 
-      <div className="p-8 max-w-2xl space-y-6">
+      <div className="p-4 sm:p-6 md:p-8 max-w-2xl space-y-6">
         {/* Appearance */}
         <motion.section
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0 }}
-          className="glass p-6"
+          className="glass p-4 sm:p-6"
         >
           <div className="flex items-center gap-3 mb-5">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-500/15 to-pink-500/10 flex items-center justify-center">
@@ -105,7 +105,7 @@ export default function SettingsPage() {
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.08 }}
-          className="glass p-6"
+          className="glass p-4 sm:p-6"
         >
           <div className="flex items-center gap-3 mb-5">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-green-500/15 to-emerald-500/10 flex items-center justify-center">
@@ -179,7 +179,7 @@ export default function SettingsPage() {
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.16 }}
-          className="glass p-6"
+          className="glass p-4 sm:p-6"
         >
           <div className="flex items-center gap-3 mb-5">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-red-500/15 to-rose-500/10 flex items-center justify-center">
@@ -198,7 +198,7 @@ export default function SettingsPage() {
           <div className="space-y-3">
             <p className="text-sm text-[var(--color-text-secondary)]">
               Admin Email:{" "}
-              <span className="font-mono text-[var(--color-text-primary)]">
+              <span className="font-mono text-[var(--color-text-primary)] break-all">
                 admin@galleryonthego.com
               </span>
             </p>
@@ -214,7 +214,7 @@ export default function SettingsPage() {
           animate={{ opacity: 1 }}
           transition={{ delay: 0.24 }}
         >
-          <button className="btn-primary">
+          <button className="btn-primary w-full sm:w-auto">
             <Save className="w-4 h-4" />
             Save Settings
           </button>

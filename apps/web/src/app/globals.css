@@ -195,7 +195,7 @@
 .input-glass {
   width: 100%;
   padding: 0.75rem 1rem;
-  font-size: 0.9375rem;
+  font-size: 1rem; /* 16px on mobile prevents auto-zoom on focus */
   color: var(--color-text-primary);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--color-border-subtle);
@@ -203,6 +203,13 @@
   outline: none;
   transition: all 0.2s ease;
   font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (min-width: 768px) {
+  .input-glass {
+    font-size: 0.9375rem;
+  }
 }
 
 .input-glass::placeholder {

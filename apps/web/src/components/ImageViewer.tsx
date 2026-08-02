@@ -19,7 +19,7 @@ import {
   SlidersHorizontal,
   RotateCw,
 } from "lucide-react";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import type { EditOptions } from "@/lib/fileTransfer";
 
 interface ImageViewerProps {
@@ -149,6 +149,27 @@ export default function ImageViewer({
     }, 0);
   }, [imageUrl]);
 
+  const touchStartX = useRef<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === null) return;
+    const touchEndX = e.changedTouches[0].clientX;
+    const diffX = touchStartX.current - touchEndX;
+
+    if (Math.abs(diffX) > 50) {
+      if (diffX > 0 && hasNext && onNext) {
+        onNext();
+      } else if (diffX < 0 && hasPrev && onPrev) {
+        onPrev();
+      }
+    }
+    touchStartX.current = null;
+  };
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -159,29 +180,31 @@ export default function ImageViewer({
           transition={{ duration: 0.2 }}
           className="lightbox-backdrop"
           onClick={onClose}
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
         >
           {/* Top Controls */}
           <motion.div
             initial={{ y: -20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
-            className="absolute top-0 left-0 right-0 h-16 flex items-center justify-between px-6 bg-gradient-to-b from-black/60 to-transparent z-10"
+            className="absolute top-0 left-0 right-0 h-16 flex items-center justify-between px-3 md:px-6 bg-gradient-to-b from-black/80 to-transparent z-10 gap-2"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-white truncate">
+              <p className="text-xs md:text-sm font-medium text-white truncate max-w-[140px] sm:max-w-xs md:max-w-none">
                 {imageName}
               </p>
               {imageSize && (
-                <p className="text-xs text-white/50">{formatSize(imageSize)}</p>
+                <p className="text-[10px] md:text-xs text-white/50">{formatSize(imageSize)}</p>
               )}
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 md:gap-2">
               {!isVideo && (
-                <>
+                <div className="hidden sm:flex items-center gap-1">
                   <button
                     onClick={() => setZoom((z) => Math.max(z - 0.25, 0.5))}
-                    className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
+                    className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all min-w-[36px] min-h-[36px]"
                   >
                     <ZoomOut className="w-4 h-4 text-white" />
                   </button>
@@ -190,22 +213,22 @@ export default function ImageViewer({
                   </span>
                   <button
                     onClick={() => setZoom((z) => Math.min(z + 0.25, 4))}
-                    className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
+                    className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all min-w-[36px] min-h-[36px]"
                   >
                     <ZoomIn className="w-4 h-4 text-white" />
                   </button>
-                </>
+                </div>
               )}
               <button
                 onClick={() => setShowInfo(!showInfo)}
-                className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
+                className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all min-w-[36px] min-h-[36px]"
               >
                 <Info className="w-4 h-4 text-white" />
               </button>
               {onEdit && !isVideo && (
                 <button
                   onClick={() => setShowEdit(!showEdit)}
-                  className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
+                  className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all min-w-[36px] min-h-[36px]"
                   title="Edit"
                 >
                   <SlidersHorizontal className="w-4 h-4 text-white" />
@@ -214,7 +237,7 @@ export default function ImageViewer({
               {onRename && (
                 <button
                   onClick={handleRename}
-                  className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all"
+                  className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all min-w-[36px] min-h-[36px]"
                   title="Rename"
                 >
                   <Pencil className="w-4 h-4 text-white" />
@@ -223,7 +246,7 @@ export default function ImageViewer({
               {onDelete && (
                 <button
                   onClick={handleDelete}
-                  className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-red-500/20 transition-all"
+                  className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-red-500/20 transition-all min-w-[36px] min-h-[36px]"
                   title="Delete"
                 >
                   <Trash2 className="w-4 h-4 text-white" />
@@ -232,15 +255,15 @@ export default function ImageViewer({
               {onDownload && (
                 <button
                   onClick={onDownload}
-                  className="btn-primary py-2 px-4 text-xs"
+                  className="btn-primary py-1.5 px-3 md:py-2 md:px-4 text-xs min-h-[36px]"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  Download
+                  <span className="hidden sm:inline">Download</span>
                 </button>
               )}
               <button
                 onClick={onClose}
-                className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-red-500/20 transition-all"
+                className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-red-500/20 transition-all min-w-[36px] min-h-[36px]"
               >
                 <X className="w-4 h-4 text-white" />
               </button>
@@ -253,7 +276,7 @@ export default function ImageViewer({
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}
             transition={{ duration: 0.25, ease: "easeOut" }}
-            className="max-w-[90vw] max-h-[85vh] overflow-auto"
+            className="max-w-[95vw] max-h-[85vh] overflow-auto"
             onClick={(e) => e.stopPropagation()}
           >
             {isVideo ? (
@@ -313,9 +336,9 @@ export default function ImageViewer({
                 e.stopPropagation();
                 onPrev?.();
               }}
-              className="absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-2xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all z-10"
+              className="absolute left-2 md:left-4 top-1/2 -translate-y-1/2 w-10 h-10 md:w-12 md:h-12 rounded-2xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all z-10 min-w-[40px] min-h-[40px]"
             >
-              <ChevronLeft className="w-6 h-6 text-white" />
+              <ChevronLeft className="w-5 h-5 md:w-6 md:h-6 text-white" />
             </button>
           )}
           {hasNext && (
@@ -324,9 +347,9 @@ export default function ImageViewer({
                 e.stopPropagation();
                 onNext?.();
               }}
-              className="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-2xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all z-10"
+              className="absolute right-2 md:right-4 top-1/2 -translate-y-1/2 w-10 h-10 md:w-12 md:h-12 rounded-2xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all z-10 min-w-[40px] min-h-[40px]"
             >
-              <ChevronRight className="w-6 h-6 text-white" />
+              <ChevronRight className="w-5 h-5 md:w-6 md:h-6 text-white" />
             </button>
           )}
 
