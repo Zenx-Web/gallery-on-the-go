@@ -62,7 +62,6 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
       ),
       body: Stack(
         children: [
-          const Positioned.fill(child: GlassBackground()),
           _loading
               ? const Center(child: CircularProgressIndicator())
               : _decks.isEmpty

@@ -94,7 +94,8 @@ flutter:
 
 flutter_launcher_icons:
   android: true
-  image_path: "assets/icon/logo.png"
-  # Adaptive icon: white backdrop matches the logo's own white canvas.
-  adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/icon/logo.png"
+  image_path: "assets/icon/app_icon.png"
+  # Adaptive icon: purple backdrop matches AppColors.accent, foreground is
+  # the monogram alone on transparent so it isn't clipped by the OS mask.
+  adaptive_icon_background: "#6C63FF"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"

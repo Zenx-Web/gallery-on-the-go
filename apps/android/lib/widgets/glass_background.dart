@@ -38,7 +38,7 @@ class GlassBackground extends StatelessWidget {
       left: left,
       right: right,
       child: ImageFiltered(
-        imageFilter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+        imageFilter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
         child: Container(
           width: size,
           height: size,
@@ -61,6 +61,7 @@ class GlassContainer extends StatelessWidget {
     this.margin,
     this.color,
     this.blurSigma = 20,
+    this.enableBlur = true,
   });
 
   final Widget child;
@@ -69,25 +70,29 @@ class GlassContainer extends StatelessWidget {
   final EdgeInsetsGeometry? margin;
   final Color? color;
   final double blurSigma;
+  final bool enableBlur;
 
   @override
   Widget build(BuildContext context) {
+    final content = Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        color: color ?? AppColors.surface,
+        borderRadius: BorderRadius.circular(borderRadius),
+        border: Border.all(color: AppColors.glassBorder),
+      ),
+      child: child,
+    );
     return Container(
       margin: margin,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(borderRadius),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-          child: Container(
-            padding: padding,
-            decoration: BoxDecoration(
-              color: color ?? AppColors.surface,
-              borderRadius: BorderRadius.circular(borderRadius),
-              border: Border.all(color: AppColors.glassBorder),
-            ),
-            child: child,
-          ),
-        ),
+        child: enableBlur
+            ? BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+                child: content,
+              )
+            : content,
       ),
     );
   }

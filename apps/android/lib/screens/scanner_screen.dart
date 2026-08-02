@@ -8,7 +8,6 @@ import 'package:permission_handler/permission_handler.dart';
 import '../services/permission_gate.dart';
 import '../services/study_storage.dart';
 import '../theme/app_theme.dart';
-import '../widgets/glass_background.dart';
 
 class ScannerScreen extends StatefulWidget {
   const ScannerScreen({super.key, this.isActive = true});
@@ -119,13 +118,20 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
     return dir;
   }
 
+  // Path separators and other filesystem-reserved characters in a
+  // user-typed name would otherwise break File() construction on save.
+  String _sanitizeFileName(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return 'Scan ${DateTime.now().millisecondsSinceEpoch}';
+    final cleaned = trimmed.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    return cleaned.isEmpty ? 'Scan ${DateTime.now().millisecondsSinceEpoch}' : cleaned;
+  }
+
   Future<void> _saveScans(_SaveScanResult result) async {
     setState(() => _saving = true);
     try {
       final dir = await _scansDir();
-      final safeName = result.name.trim().isEmpty
-          ? 'Scan ${DateTime.now().millisecondsSinceEpoch}'
-          : result.name.trim();
+      final safeName = _sanitizeFileName(result.name);
 
       if (result.asPdf) {
         final doc = pw.Document();
@@ -193,7 +199,6 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
       ),
       body: Stack(
         children: [
-          const Positioned.fill(child: GlassBackground()),
           SafeArea(
             child: Column(
               children: [
@@ -347,7 +352,7 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(AppRadius.sm - 1),
-              child: Image.file(File(_pages[i].path), fit: BoxFit.cover),
+              child: Image.file(File(_pages[i].path), fit: BoxFit.cover, cacheWidth: 160),
             ),
           ),
         ),

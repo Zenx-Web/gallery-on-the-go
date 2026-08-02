@@ -25,6 +25,7 @@ class DashboardCard extends StatelessWidget {
       onTap: onTap,
       child: GlassContainer(
         padding: const EdgeInsets.all(AppSpacing.lg),
+        enableBlur: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
