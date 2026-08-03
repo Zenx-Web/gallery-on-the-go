@@ -69,6 +69,17 @@ void onStart(ServiceInstance service) async {
         deviceId: credentials.deviceId,
         deviceToken: credentials.deviceToken,
         mediaService: mediaService,
+        onAuthFailed: () async {
+          // The server rejected our token — the device was likely removed from
+          // the web dashboard. Clear stale credentials so the next connect()
+          // call triggers a fresh registration.
+          await registrationService.clearCredentials();
+          lastStatus = {'state': 'connecting'};
+          service.invoke('device_status', lastStatus);
+          // Small delay before retrying so the server-side delete can propagate.
+          await Future.delayed(const Duration(seconds: 3));
+          await connect();
+        },
       );
       socketService!.connect();
 
@@ -91,9 +102,15 @@ void onStart(ServiceInstance service) async {
     }
   }
 
-  // Reconnect signal — sent by FCM handler or UI isolate.
+  // Reconnect signal — sent by FCM handler or UI isolate when a wake push
+  // arrives. If the socket service was never initialized (e.g. startup
+  // failed before socketService was assigned), fall back to a full connect().
   service.on('reconnect').listen((_) {
-    socketService?.reconnect();
+    if (socketService != null) {
+      socketService!.reconnect();
+    } else {
+      connect();
+    }
   });
 
   // Sent from the UI when the user taps "Retry" on a registration error —

@@ -95,6 +95,24 @@ Future<void> initFcmHandler({
         service.invoke('reconnect');
       }
     });
+
+    // Background (not terminated) — FCM delivers the notification to the tray.
+    // The background isolate is already running so the background handler
+    // (firebaseMessagingBackgroundHandler) fires and sends 'reconnect', but
+    // we also listen here in case the OS routes the message to this isolate.
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      if (message.data['type'] == 'gallery_wake') {
+        service.invoke('reconnect');
+      }
+    });
+
+    // Handle the case where tapping the FCM notification launched the app
+    // from a fully terminated state — by the time we get here the background
+    // service is already running, so just trigger a reconnect.
+    final initial = await FirebaseMessaging.instance.getInitialMessage();
+    if (initial != null && initial.data['type'] == 'gallery_wake') {
+      service.invoke('reconnect');
+    }
   } catch (e) {
     // FCM failure must not crash the socket service.
     print('[FCM] initFcmHandler error: $e');

@@ -4,24 +4,49 @@
  * Devices Page — Manage connected Android devices.
  */
 
-import { motion } from "framer-motion";
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import TopBar from "@/components/TopBar";
 import DeviceCard from "@/components/DeviceCard";
 import EmptyState from "@/components/EmptyState";
 import { useDevices } from "@/contexts/DeviceContext";
-import { Smartphone, RefreshCw, Trash2, Bell, HardDrive } from "lucide-react";
+import { wakeDevice } from "@/lib/api";
+import { Smartphone, RefreshCw, Trash2, Bell, HardDrive, CheckCircle, AlertCircle } from "lucide-react";
 
 export default function DevicesPage() {
   const router = useRouter();
   const { devices, loading, selectedDevice, selectDevice, refresh, removeDevice } =
     useDevices();
+  const [waking, setWaking] = useState(false);
+  const [wakeResult, setWakeResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const handleRemove = async (id: string) => {
     if (!confirm("Remove this device? It will need to reconnect from the app to reappear.")) {
       return;
     }
     await removeDevice(id);
+  };
+
+  const handleWake = async () => {
+    if (!selectedDevice || waking) return;
+    setWaking(true);
+    setWakeResult(null);
+    try {
+      const result = await wakeDevice(selectedDevice.id);
+      const message =
+        result.status === "already_online"
+          ? "Device is already online."
+          : result.status === "wake_sent"
+          ? "Wake signal sent — device should reconnect shortly."
+          : "Failed to send wake signal. Check the device FCM token.";
+      setWakeResult({ ok: result.status !== "fcm_failed", message });
+    } catch (err) {
+      setWakeResult({ ok: false, message: (err as Error).message });
+    } finally {
+      setWaking(false);
+      setTimeout(() => setWakeResult(null), 5000);
+    }
   };
 
   return (
@@ -35,19 +60,43 @@ export default function DevicesPage() {
 
       <div className="p-4 sm:p-6 md:p-8 space-y-6">
         {/* Actions */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button className="btn-primary" onClick={() => refresh()} disabled={loading}>
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </button>
           <button
-            className="btn-ghost opacity-50 cursor-not-allowed"
-            disabled
-            title="Push-notification wake isn't available yet"
+            className="btn-ghost"
+            onClick={handleWake}
+            disabled={!selectedDevice || selectedDevice.status === "online" || waking}
+            title={
+              !selectedDevice
+                ? "Select a device first"
+                : selectedDevice.status === "online"
+                ? "Device is already online"
+                : "Send FCM push to wake the device"
+            }
           >
-            <Bell className="w-4 h-4" />
-            Wake Device
+            <Bell className={`w-4 h-4 ${waking ? "animate-pulse" : ""}`} />
+            {waking ? "Waking…" : "Wake Device"}
           </button>
+          <AnimatePresence>
+            {wakeResult && (
+              <motion.div
+                initial={{ opacity: 0, x: -8 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -8 }}
+                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg ${
+                  wakeResult.ok
+                    ? "bg-green-500/10 text-green-400 border border-green-500/20"
+                    : "bg-red-500/10 text-red-400 border border-red-500/20"
+                }`}
+              >
+                {wakeResult.ok ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                {wakeResult.message}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {devices.length === 0 && !loading ? (

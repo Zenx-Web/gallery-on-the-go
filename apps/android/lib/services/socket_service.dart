@@ -21,6 +21,11 @@ class SocketService {
   final String deviceToken;
   final MediaService mediaService;
 
+  /// Called when the server explicitly rejects this device's token
+  /// (e.g. the device was removed from the web dashboard).
+  /// The caller should clear persisted credentials and re-register.
+  final Future<void> Function()? onAuthFailed;
+
   io.Socket? _socket;
   FileStreamService? _fileStreamService;
   Timer? _heartbeatTimer;
@@ -36,6 +41,7 @@ class SocketService {
     required this.deviceId,
     required this.deviceToken,
     required this.mediaService,
+    this.onAuthFailed,
   });
 
   void connect() {
@@ -65,7 +71,20 @@ class SocketService {
     });
 
     socket.onReconnectAttempt((_) => _setStatus(ConnectionStatus.connecting));
-    socket.onConnectError((_) => _setStatus(ConnectionStatus.connecting));
+    socket.onConnectError((err) {
+      _setStatus(ConnectionStatus.connecting);
+      // If the server explicitly rejected our token (device was deleted from
+      // the web dashboard), stop retrying and notify the caller so it can
+      // clear stale credentials and trigger a fresh registration.
+      final message = err is Map ? err['message'] : err.toString();
+      if (message != null &&
+          (message.toString().contains('Invalid device token') ||
+           message.toString().contains('Device token required'))) {
+        _socket?.dispose();
+        _setStatus(ConnectionStatus.offline);
+        onAuthFailed?.call();
+      }
+    });
 
     _registerHandlers(socket);
     _watchConnectivity();

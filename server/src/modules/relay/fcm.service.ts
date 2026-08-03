@@ -70,9 +70,28 @@ export async function sendFcmMessage(
             deviceId: payload.deviceId,
             timestamp: Date.now().toString(),
           },
+          // A notification body is required for Android to treat this as a
+          // high-priority "display" message that wakes the device even in
+          // Doze mode. Data-only messages (no notification field) are
+          // deprioritised/deferred on Android 6+ by battery optimisations.
+          // The title is intentionally blank so nothing visible is shown.
+          notification: {
+            title: ' ',
+            body: ' ',
+          },
           android: {
             priority: 'HIGH',
             ttl: '60s',
+            notification: {
+              // Override the visible notification to show nothing — we only
+              // want the wake-up side-effect, not a user-facing alert.
+              title: ' ',
+              body: ' ',
+              sound: 'default',
+              default_sound: true,
+              // Allow delivery even before the user unlocks after reboot.
+              direct_boot_ok: true,
+            },
           },
         },
       }),
