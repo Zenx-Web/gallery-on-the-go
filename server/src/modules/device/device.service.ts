@@ -106,6 +106,10 @@ export async function getDeviceById(id: string): Promise<Device | null> {
 
 /**
  * Validate a device token. Returns the device if valid.
+ * If the token is unrecognized but looks like a valid device token (dev_*),
+ * adopt it onto an orphaned device (one with no active socket) so that a
+ * previously removed-and-re-added device can reconnect without manual
+ * intervention on the phone.
  */
 export async function validateDeviceToken(token: string): Promise<Device | null> {
   const { data, error } = await supabase
@@ -115,11 +119,46 @@ export async function validateDeviceToken(token: string): Promise<Device | null>
     .eq('is_active', true)
     .maybeSingle();
 
-  if (error || !data) {
-    return null;
+  if (!error && data) {
+    return mapDbToDevice(data);
   }
 
-  return mapDbToDevice(data);
+  // Token not found — try to adopt it onto an orphaned device
+  if (token.startsWith('dev_')) {
+    const disconnectedIds = await getOrphanedDeviceIds();
+    if (disconnectedIds.length > 0) {
+      const { data: adopted, error: adoptErr } = await supabase
+        .from('devices')
+        .update({ device_token: token })
+        .eq('id', disconnectedIds[0])
+        .eq('is_active', true)
+        .select()
+        .single();
+
+      if (!adoptErr && adopted) {
+        console.log(`  🔗 Adopted stale token onto device: ${adopted.device_name}`);
+        return mapDbToDevice(adopted);
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Find devices that have no active socket connection — candidates for
+ * token adoption when a stale token connects.
+ */
+async function getOrphanedDeviceIds(): Promise<string[]> {
+  const { data } = await supabase
+    .from('devices')
+    .select('id')
+    .eq('is_active', true);
+
+  if (!data) return [];
+  return data
+    .map((d) => d.id)
+    .filter((id) => !connectedDevices.has(id));
 }
 
 /**

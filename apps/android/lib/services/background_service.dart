@@ -56,7 +56,7 @@ void onStart(ServiceInstance service) async {
   Map<String, dynamic> lastStatus = {'state': 'connecting'};
   service.on('get_device_status').listen((_) => service.invoke('device_status', lastStatus));
 
-  Future<void> connect() async {
+  Future<void> connect({int attempt = 1}) async {
     try {
       final serverUrl = await registrationService.getServerUrl();
       final credentials = await registrationService.registerOrLoad();
@@ -99,6 +99,11 @@ void onStart(ServiceInstance service) async {
           content: 'Error: $e',
         );
       }
+
+      // Auto-retry with exponential backoff (caps at 60s).
+      final delay = Duration(seconds: attempt.clamp(1, 6) * 10);
+      await Future.delayed(delay);
+      await connect(attempt: attempt + 1);
     }
   }
 

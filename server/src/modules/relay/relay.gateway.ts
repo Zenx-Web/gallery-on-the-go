@@ -21,7 +21,9 @@ import {
   updateDeviceHeartbeat,
   updateLastSeen,
   getDeviceSocketId,
+  getDeviceById,
 } from '../device/device.service.js';
+import { sendFcmMessage } from '../relay/fcm.service.js';
 import type { AdminTokenPayload } from '../../middleware/auth.middleware.js';
 
 let io: Server;
@@ -200,6 +202,23 @@ function handleDeviceConnection(socket: Socket) {
       deviceId: device.id,
       status: 'offline',
     });
+
+    // Auto-wake: if the disconnect was unexpected (not a deliberate client
+    // close), send an FCM push after a short grace period so the device
+    // reconnects itself. Skip "client namespace disconnect" which means
+    // the server or client intentionally called .disconnect().
+    if (reason !== 'client namespace disconnect' && reason !== 'server namespace disconnect') {
+      setTimeout(async () => {
+        // Only wake if device hasn't reconnected on its own
+        if (getDeviceSocketId(device.id)) return;
+
+        const dbDevice = await getDeviceById(device.id);
+        if (dbDevice?.fcmToken) {
+          console.log(`  📲 Auto-waking ${device.deviceName} via FCM...`);
+          await sendFcmMessage(dbDevice.fcmToken, { deviceId: device.id, action: 'reconnect' });
+        }
+      }, 10_000);
+    }
   });
 }
 

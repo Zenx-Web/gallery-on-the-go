@@ -106,8 +106,8 @@ export const TIMEOUTS = {
   DEVICE_HEARTBEAT_INTERVAL: 30_000, // 30 seconds
   DEVICE_OFFLINE_THRESHOLD: 90_000,  // 90 seconds without heartbeat
   FILE_STREAM_TIMEOUT: 120_000,      // 2 minutes per file
-  RECONNECT_DELAY: 5_000,            // 5 seconds
-  MAX_RECONNECT_ATTEMPTS: 10,
+  RECONNECT_DELAY: 3_000,            // 3 seconds (initial)
+  RECONNECT_DELAY_MAX: 30_000,       // 30 seconds (capped backoff)
 } as const;
 
 // ─── File Constants ───

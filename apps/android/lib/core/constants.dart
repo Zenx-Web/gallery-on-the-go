@@ -64,7 +64,8 @@ class Timeouts {
   static const int deviceHeartbeatIntervalMs = 30000;
   static const int deviceOfflineThresholdMs = 90000;
   static const int fileStreamTimeoutMs = 120000;
-  static const int reconnectDelayMs = 5000;
+  static const int reconnectDelayMs = 3000;
+  static const int reconnectDelayMaxMs = 30000;
   static const int maxReconnectAttempts = 2147483647;
 }
 

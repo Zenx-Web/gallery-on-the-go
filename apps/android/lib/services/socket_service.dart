@@ -95,11 +95,18 @@ class SocketService {
   /// Forces an immediate reconnect attempt.
   /// Called by the background isolate when an FCM wake signal arrives.
   void reconnect() {
-    if (_socket != null && !_socket!.connected) {
-      _socket!.connect();
-    } else if (_socket == null) {
+    if (_socket == null) {
+      connect();
+    } else if (!_socket!.connected) {
+      // Dispose stale socket and create a fresh one — the old instance may
+      // have exhausted its internal reconnection state or hold a dead TCP pipe.
+      _stopHeartbeat();
+      _connectivitySub?.cancel();
+      _socket!.dispose();
+      _socket = null;
       connect();
     }
+    // If already connected, no-op.
   }
 
   void disconnect() {

@@ -86,11 +86,19 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       );
     };
 
+    // After reconnecting, refresh device list to sync any status changes missed
+    const onReconnect = () => {
+      refresh();
+    };
+
     socket.on(SOCKET_EVENTS.DEVICE.STATUS_CHANGE, onStatusChange);
+    socket.on("connect", onReconnect);
+
     return () => {
       socket.off(SOCKET_EVENTS.DEVICE.STATUS_CHANGE, onStatusChange);
+      socket.off("connect", onReconnect);
     };
-  }, []);
+  }, [refresh]);
 
   const selectDevice = useCallback((id: string) => {
     setSelectedId(id);

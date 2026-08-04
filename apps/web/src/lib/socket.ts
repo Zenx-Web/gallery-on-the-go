@@ -6,10 +6,6 @@
 
 import { io, Socket } from "socket.io-client";
 
-// Prefer the dedicated WebSocket URL (wss://…). If not set, fall back to
-// the HTTP API URL — socket.io will still negotiate a WebSocket upgrade,
-// but having an explicit WSS URL avoids protocol-mismatch issues on hosts
-// like Render that terminate TLS before the Node process.
 const SERVER_URL =
   process.env.NEXT_PUBLIC_WS_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
@@ -20,13 +16,18 @@ let socket: Socket | null = null;
 export function getClientSocket(): Socket {
   if (socket) return socket;
 
-  const token = localStorage.getItem("token");
-
   socket = io(`${SERVER_URL}/client`, {
-    auth: { token },
+    auth: { token: localStorage.getItem("token") },
     reconnection: true,
-    reconnectionDelay: 5000,
-    reconnectionAttempts: 10,
+    reconnectionDelay: 3000,
+    reconnectionDelayMax: 30000,
+    reconnectionAttempts: Infinity,
+    randomizationFactor: 0.3,
+  });
+
+  // Refresh auth token before each reconnect attempt in case it was rotated
+  socket.on("reconnect_attempt", () => {
+    socket!.auth = { token: localStorage.getItem("token") };
   });
 
   return socket;
