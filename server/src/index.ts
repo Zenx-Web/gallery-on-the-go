@@ -92,7 +92,16 @@ async function start() {
   });
 }
 
-start().catch((err) => {
+start().then(() => {
+  // Self-ping every 10 minutes to prevent Render + Supabase free-tier sleep.
+  const KEEP_ALIVE_MS = 10 * 60 * 1000;
+  setInterval(async () => {
+    try {
+      await fetch(`http://localhost:${env.PORT}/api/health`);
+      await testSupabaseConnection();
+    } catch (_) { /* ignore */ }
+  }, KEEP_ALIVE_MS);
+}).catch((err) => {
   console.error('❌ Failed to start server:', err);
   process.exit(1);
 });
