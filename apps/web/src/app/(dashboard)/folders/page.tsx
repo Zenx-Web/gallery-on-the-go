@@ -6,14 +6,16 @@
  * download files, and explore the entire file system.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { SOCKET_EVENTS } from "@gallery/shared";
 import TopBar from "@/components/TopBar";
 import EmptyState from "@/components/EmptyState";
+import ImageViewer from "@/components/ImageViewer";
 import { useDevices } from "@/contexts/DeviceContext";
 import { getClientSocket } from "@/lib/socket";
 import { getFileTransferManager, downloadBlob } from "@/lib/fileTransfer";
+import { runWithConcurrency } from "@/lib/concurrency";
 import {
   Folder,
   FolderOpen,
@@ -27,10 +29,15 @@ import {
   ArrowLeft,
   Home,
   Download,
+  Eye,
+  Play,
   Loader2,
   AlertCircle,
   Smartphone,
   HardDrive,
+  ArrowDownAZ,
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -59,6 +66,68 @@ interface DirectoryListResponse {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 60;
+// A date sort needs the entire directory in hand. The device enumerates a
+// folder in NAME order, so timestamps are scattered arbitrarily across pages —
+// sorting only the loaded ones would show "the oldest of the newest 60", not
+// the oldest overall, and the true oldest entries would only surface after
+// scrolling the whole folder in. One oversized page fetches everything: the
+// device already reads and sorts the whole directory on every request and
+// merely slices the result, so a bigger pageSize costs payload, not extra
+// scanning. Name order keeps the cheap paged path.
+const ALL_ENTRIES_PAGE_SIZE = 10000;
+
+function pageSizeFor(order: SortOrder): number {
+  return order === "name" ? PAGE_SIZE : ALL_ENTRIES_PAGE_SIZE;
+}
+
+// Matches the Gallery page — the device handles each thumbnail request as its
+// own async job, so firing one per file at once floods it and most time out.
+const THUMBNAIL_CONCURRENCY = 5;
+
+const IMAGE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
+const VIDEO_EXTS = ["mp4", "mkv", "avi", "mov", "webm"];
+const AUDIO_EXTS = ["mp3", "flac", "aac", "wav", "ogg"];
+const DOC_EXTS = ["pdf", "doc", "docx", "txt", "md", "odt", "xls", "xlsx", "csv"];
+const ARCHIVE_EXTS = ["zip", "rar", "7z", "tar", "gz"];
+
+function getExt(entry: FolderEntry): string {
+  return entry.name.split(".").pop()?.toLowerCase() || "";
+}
+
+function isImageEntry(entry: FolderEntry): boolean {
+  if (entry.isDirectory) return false;
+  return (entry.mimeType || "").startsWith("image/") || IMAGE_EXTS.includes(getExt(entry));
+}
+
+function isVideoEntry(entry: FolderEntry): boolean {
+  if (entry.isDirectory) return false;
+  return (entry.mimeType || "").startsWith("video/") || VIDEO_EXTS.includes(getExt(entry));
+}
+
+/** Files the lightbox can render — everything else opens in a new tab. */
+function isPreviewableMedia(entry: FolderEntry): boolean {
+  return isImageEntry(entry) || isVideoEntry(entry);
+}
+
+type SortOrder = "name" | "newest" | "oldest";
+
+/**
+ * Directories always group above files; within each group the chosen order
+ * applies. Name is the tiebreak (and the whole ordering when order is "name"),
+ * which also keeps entries with no modifiedAt in a stable, sensible place —
+ * FolderEntry.modifiedAt is optional.
+ */
+function sortEntries(list: FolderEntry[], order: SortOrder): FolderEntry[] {
+  return [...list].sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    if (order !== "name") {
+      const ta = a.modifiedAt ? new Date(a.modifiedAt).getTime() : 0;
+      const tb = b.modifiedAt ? new Date(b.modifiedAt).getTime() : 0;
+      if (ta !== tb) return order === "newest" ? tb - ta : ta - tb;
+    }
+    return a.name.localeCompare(b.name);
+  });
+}
 
 function formatSize(bytes: number): string {
   if (!bytes || bytes <= 0) return "";
@@ -83,30 +152,25 @@ function formatDate(iso?: string): string {
 
 function getFileIcon(entry: FolderEntry) {
   if (entry.isDirectory) return Folder;
-  const ext = entry.name.split(".").pop()?.toLowerCase() || "";
+  const ext = getExt(entry);
   const mime = entry.mimeType || "";
-  if (mime.startsWith("image/") || ["jpg", "jpeg", "png", "webp", "gif", "bmp"].includes(ext))
-    return FileImage;
-  if (mime.startsWith("video/") || ["mp4", "mkv", "avi", "mov", "webm"].includes(ext))
-    return FileVideo;
-  if (mime.startsWith("audio/") || ["mp3", "flac", "aac", "wav", "ogg"].includes(ext))
-    return Music;
-  if (["pdf", "doc", "docx", "txt", "md", "odt", "xls", "xlsx", "csv"].includes(ext))
-    return FileText;
-  if (["zip", "rar", "7z", "tar", "gz"].includes(ext)) return FileArchive;
+  if (mime.startsWith("image/") || IMAGE_EXTS.includes(ext)) return FileImage;
+  if (mime.startsWith("video/") || VIDEO_EXTS.includes(ext)) return FileVideo;
+  if (mime.startsWith("audio/") || AUDIO_EXTS.includes(ext)) return Music;
+  if (DOC_EXTS.includes(ext)) return FileText;
+  if (ARCHIVE_EXTS.includes(ext)) return FileArchive;
   return File;
 }
 
 function getIconColor(entry: FolderEntry): string {
   if (entry.isDirectory) return "text-[var(--color-accent)]";
-  const ext = entry.name.split(".").pop()?.toLowerCase() || "";
+  const ext = getExt(entry);
   const mime = entry.mimeType || "";
-  if (mime.startsWith("image/") || ["jpg", "jpeg", "png", "webp"].includes(ext))
-    return "text-emerald-400";
-  if (mime.startsWith("video/") || ["mp4", "mkv", "avi"].includes(ext)) return "text-purple-400";
-  if (mime.startsWith("audio/") || ["mp3", "flac", "aac"].includes(ext)) return "text-pink-400";
-  if (["pdf"].includes(ext)) return "text-red-400";
-  if (["zip", "rar", "7z"].includes(ext)) return "text-yellow-400";
+  if (mime.startsWith("image/") || IMAGE_EXTS.includes(ext)) return "text-emerald-400";
+  if (mime.startsWith("video/") || VIDEO_EXTS.includes(ext)) return "text-purple-400";
+  if (mime.startsWith("audio/") || AUDIO_EXTS.includes(ext)) return "text-pink-400";
+  if (DOC_EXTS.includes(ext)) return "text-red-400";
+  if (ARCHIVE_EXTS.includes(ext)) return "text-yellow-400";
   return "text-[var(--color-text-muted)]";
 }
 
@@ -135,13 +199,35 @@ export default function FoldersPage() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [downloading, setDownloading] = useState<Set<string>>(new Set());
+  const [opening, setOpening] = useState<Set<string>>(new Set());
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  const [sortOrder, setSortOrder] = useState<SortOrder>("name");
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const listenerRef = useRef<(() => void) | null>(null);
+  // False once the first directory load has happened; until then the sort
+  // effect has nothing to reload and stays out of the way.
+  const firstSortEffectRef = useRef(true);
+  // Object URLs created for thumbnails / previews, revoked when the folder
+  // changes or the page unmounts so blobs don't accumulate.
+  const objectUrlsRef = useRef<string[]>([]);
+
+  const resetPreviewState = useCallback(() => {
+    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrlsRef.current = [];
+    setThumbnails({});
+    setOpening(new Set());
+    setViewerOpen(false);
+    setViewerUrl(null);
+    setViewerIndex(0);
+  }, []);
 
   // ─── Data fetching ───────────────────────────────────────────────────────
 
   const fetchDirectory = useCallback(
-    (path: string, pageNum: number, append = false) => {
+    (path: string, pageNum: number, append = false, pageSize = PAGE_SIZE) => {
       if (!selectedDevice) return;
       const socket = getClientSocket();
       if (!socket?.connected) {
@@ -180,13 +266,11 @@ export default function FoldersPage() {
         setPage(data.page);
         setHasMore(data.hasMore);
 
-        // Sort: directories first, then files, each alphabetically
-        const sorted = [...data.entries].sort((a, b) => {
-          if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
-
-        setEntries((prev) => (append ? [...prev, ...sorted] : sorted));
+        // Base order; the user-selected order is applied as a derived array
+        // below so re-sorting never re-triggers a thumbnail refetch.
+        setEntries((prev) =>
+          append ? [...prev, ...sortEntries(data.entries, "name")] : sortEntries(data.entries, "name")
+        );
 
         // Remove this one-time listener
         socket.off(SOCKET_EVENTS.FOLDERS.LIST_RESPONSE, handler);
@@ -203,7 +287,7 @@ export default function FoldersPage() {
         deviceId: selectedDevice.id,
         path: path || undefined,
         page: pageNum,
-        pageSize: PAGE_SIZE,
+        pageSize,
       });
     },
     [selectedDevice]
@@ -216,7 +300,10 @@ export default function FoldersPage() {
     setCurrentPath("");
     setPage(1);
     setHasMore(false);
-    fetchDirectory("", 1, false);
+    resetPreviewState();
+    fetchDirectory("", 1, false, pageSizeFor(sortOrder));
+    // From here on the sort effect below is responsible for reloading.
+    firstSortEffectRef.current = false;
 
     return () => {
       if (listenerRef.current) {
@@ -224,22 +311,86 @@ export default function FoldersPage() {
         listenerRef.current = null;
       }
     };
-  }, [selectedDevice, fetchDirectory]);
+    // sortOrder is intentionally not a dependency: it is only needed at the
+    // moment a device is picked, and re-running this effect on a sort change
+    // would wrongly throw the user back to the root folder. The effect below
+    // handles sort changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDevice, fetchDirectory, resetPreviewState]);
 
-  // Infinite scroll sentinel
+  // Switching between name order and a date order changes how much of the
+  // directory the device must return (a date sort needs all of it), and the
+  // page cursor is only meaningful within one ordering — so reload the folder
+  // the user is actually in, from the top.
+  useEffect(() => {
+    if (!selectedDevice) return;
+    // Nothing is loaded yet (no device has been picked since mount) — the root
+    // effect above will load with whatever order is current once one is.
+    if (firstSortEffectRef.current) return;
+    setEntries([]);
+    setPage(1);
+    setHasMore(false);
+    resetPreviewState();
+    fetchDirectory(currentPath, 1, false, pageSizeFor(sortOrder));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortOrder]);
+
+  // Lazily resolve thumbnails for image entries in the current folder.
+  useEffect(() => {
+    if (!selectedDevice || entries.length === 0) return;
+    const socket = getClientSocket();
+    const manager = getFileTransferManager(socket);
+    let cancelled = false;
+
+    // Only images — the device's thumbnail handler falls back to
+    // FlutterImageCompress on the real file, which can't decode video frames
+    // for path-based (`fs_*`) entries.
+    const pending = entries.filter((entry) => isImageEntry(entry) && !thumbnails[entry.id]);
+
+    runWithConcurrency(pending, THUMBNAIL_CONCURRENCY, async (entry) => {
+      if (cancelled) return;
+      try {
+        const url = await manager.requestThumbnail(selectedDevice.id, entry.id);
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        objectUrlsRef.current.push(url);
+        setThumbnails((prev) => ({ ...prev, [entry.id]: url }));
+      } catch (err) {
+        // Leave the entry with its file-type icon; the name is still shown.
+        console.warn(`Thumbnail failed for ${entry.name || entry.id}:`, err);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, selectedDevice]);
+
+  // Revoke every object URL on unmount.
+  useEffect(() => {
+    return () => {
+      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
+
+  // Infinite scroll sentinel. Only reachable for name order — a date sort
+  // loads the whole directory in one request, so it comes back with no more.
   useEffect(() => {
     if (!sentinelRef.current || !hasMore) return;
     const obs = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting && hasMore && !loadingMore) {
-          fetchDirectory(currentPath, page + 1, true);
+          fetchDirectory(currentPath, page + 1, true, pageSizeFor(sortOrder));
         }
       },
       { threshold: 0.1 }
     );
     obs.observe(sentinelRef.current);
     return () => obs.disconnect();
-  }, [hasMore, loadingMore, currentPath, page, fetchDirectory]);
+  }, [hasMore, loadingMore, currentPath, page, fetchDirectory, sortOrder]);
 
   // ─── Navigation ──────────────────────────────────────────────────────────
 
@@ -247,7 +398,8 @@ export default function FoldersPage() {
     setEntries([]);
     setPage(1);
     setHasMore(false);
-    fetchDirectory(path, 1, false);
+    resetPreviewState();
+    fetchDirectory(path, 1, false, pageSizeFor(sortOrder));
   };
 
   const navigateUp = () => {
@@ -272,6 +424,86 @@ export default function FoldersPage() {
         next.delete(entry.id);
         return next;
       });
+    }
+  };
+
+  // ─── Open / preview ───────────────────────────────────────────────────────
+  // Media opens in the shared fullscreen viewer; other types open as a blob
+  // in a new browser tab, letting the browser/OS render them.
+
+  // Display order. The list and the viewer must both be indexed off this same
+  // array, or the lightbox opens a different file than the one clicked.
+  const sortedEntries = useMemo(
+    () => sortEntries(entries, sortOrder),
+    [entries, sortOrder]
+  );
+
+  const previewableEntries = sortedEntries.filter(isPreviewableMedia);
+  const viewerEntry = previewableEntries[viewerIndex];
+
+  const loadViewerImage = async (index: number) => {
+    if (!selectedDevice) return;
+    const entry = previewableEntries[index];
+    if (!entry) return;
+
+    setViewerUrl(null);
+    const socket = getClientSocket();
+    const manager = getFileTransferManager(socket);
+    try {
+      const { blob } = await manager.requestFile(selectedDevice.id, entry.id);
+      const url = URL.createObjectURL(blob);
+      objectUrlsRef.current.push(url);
+      setViewerUrl(url);
+    } catch {
+      // Leave the viewer on the thumbnail-quality fallback.
+    }
+  };
+
+  const openEntry = async (entry: FolderEntry) => {
+    if (!selectedDevice || entry.isDirectory) return;
+
+    if (isPreviewableMedia(entry)) {
+      const index = previewableEntries.findIndex((e) => e.id === entry.id);
+      if (index < 0) return;
+      setViewerIndex(index);
+      setViewerOpen(true);
+      await loadViewerImage(index);
+      return;
+    }
+
+    // Non-media: open the tab synchronously (still within the click's user
+    // gesture) so the popup blocker allows it, then point it at the blob.
+    const win = window.open("", "_blank");
+    setOpening((prev) => new Set(prev).add(entry.id));
+    try {
+      const socket = getClientSocket();
+      const manager = getFileTransferManager(socket);
+      const { blob, fileName } = await manager.requestFile(selectedDevice.id, entry.id);
+      const url = URL.createObjectURL(blob);
+      objectUrlsRef.current.push(url);
+      if (win) {
+        win.location.href = url;
+      } else {
+        // Popup blocked — fall back to a normal download.
+        downloadBlob(blob, fileName || entry.name);
+      }
+    } catch (e) {
+      console.error("Open failed:", e);
+      win?.close();
+    } finally {
+      setOpening((prev) => {
+        const next = new Set(prev);
+        next.delete(entry.id);
+        return next;
+      });
+    }
+  };
+
+  const navigateViewer = async (direction: -1 | 1) => {
+    const newIndex = viewerIndex + direction;
+    if (newIndex >= 0 && newIndex < previewableEntries.length) {
+      setViewerIndex(newIndex);
+      await loadViewerImage(newIndex);
     }
   };
 
@@ -356,6 +588,46 @@ export default function FoldersPage() {
                   Loading…
                 </span>
               )}
+
+              {/* Sort control */}
+              <div className="ml-auto flex items-center gap-1">
+                <button
+                  onClick={() => setSortOrder("name")}
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                    sortOrder === "name"
+                      ? "bg-[var(--color-accent-primary)]/15 text-[var(--color-accent-primary)]"
+                      : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
+                  }`}
+                  title="Sort by name (A–Z)"
+                  aria-label="Sort by name"
+                >
+                  <ArrowDownAZ className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setSortOrder("newest")}
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                    sortOrder === "newest"
+                      ? "bg-[var(--color-accent-primary)]/15 text-[var(--color-accent-primary)]"
+                      : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
+                  }`}
+                  title="Newest first"
+                  aria-label="Sort newest first"
+                >
+                  <ArrowDownWideNarrow className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setSortOrder("oldest")}
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                    sortOrder === "oldest"
+                      ? "bg-[var(--color-accent-primary)]/15 text-[var(--color-accent-primary)]"
+                      : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
+                  }`}
+                  title="Oldest first"
+                  aria-label="Sort oldest first"
+                >
+                  <ArrowUpNarrowWide className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {/* Error state */}
@@ -382,10 +654,12 @@ export default function FoldersPage() {
             {entries.length > 0 && (
               <div className="glass rounded-xl overflow-hidden">
                 <AnimatePresence mode="popLayout">
-                  {entries.map((entry, idx) => {
+                  {sortedEntries.map((entry, idx) => {
                     const Icon = getFileIcon(entry);
                     const iconColor = getIconColor(entry);
                     const isDownloading = downloading.has(entry.id);
+                    const isOpening = opening.has(entry.id);
+                    const thumbnailUrl = thumbnails[entry.id];
 
                     return (
                       <motion.div
@@ -395,18 +669,37 @@ export default function FoldersPage() {
                         exit={{ opacity: 0 }}
                         transition={{ delay: Math.min(idx * 0.015, 0.3) }}
                         className={`
-                          flex items-center gap-3 px-3 sm:px-4 py-3
+                          flex items-center gap-3 sm:gap-4 px-3 sm:px-4 py-3
                           border-b border-[var(--color-border)] last:border-none
-                          hover:bg-white/5 transition-colors group min-h-[48px]
+                          hover:bg-white/5 transition-colors group min-h-[64px]
                           ${entry.isDirectory ? "cursor-pointer" : ""}
                         `}
                         onClick={() => {
                           if (entry.isDirectory) navigateTo(entry.path);
                         }}
                       >
-                        {/* Icon */}
-                        <div className={`shrink-0 ${iconColor}`}>
-                          <Icon className="w-5 h-5" />
+                        {/* Preview tile */}
+                        <div className="shrink-0 w-16 h-16 rounded-lg overflow-hidden flex items-center justify-center bg-white/5">
+                          {thumbnailUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={thumbnailUrl}
+                              alt={entry.name}
+                              loading="lazy"
+                              className="w-full h-full object-cover"
+                              onError={() =>
+                                console.warn(`Thumbnail failed to decode for ${entry.name}`)
+                              }
+                            />
+                          ) : (
+                            <span className={iconColor}>
+                              {isVideoEntry(entry) ? (
+                                <Play className="w-6 h-6" />
+                              ) : (
+                                <Icon className="w-7 h-7" />
+                              )}
+                            </span>
+                          )}
                         </div>
 
                         {/* Name & metadata */}
@@ -425,21 +718,38 @@ export default function FoldersPage() {
                           {entry.isDirectory ? (
                             <ChevronRight className="w-4 h-4 text-[var(--color-text-muted)]" />
                           ) : (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDownload(entry);
-                              }}
-                              disabled={isDownloading}
-                              className="btn-ghost p-2 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center"
-                              title="Download"
-                            >
-                              {isDownloading ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <Download className="w-4 h-4" />
-                              )}
-                            </button>
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openEntry(entry);
+                                }}
+                                disabled={isOpening}
+                                className="btn-ghost p-2 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center"
+                                title={isPreviewableMedia(entry) ? "Open" : "Open in new tab"}
+                              >
+                                {isOpening ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Eye className="w-4 h-4" />
+                                )}
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDownload(entry);
+                                }}
+                                disabled={isDownloading}
+                                className="btn-ghost p-2 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center"
+                                title="Download"
+                              >
+                                {isDownloading ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Download className="w-4 h-4" />
+                                )}
+                              </button>
+                            </>
                           )}
                         </div>
                       </motion.div>
@@ -456,6 +766,34 @@ export default function FoldersPage() {
                   </div>
                 )}
               </div>
+            )}
+
+            {/* Fullscreen preview for media entries in this folder */}
+            {previewableEntries.length > 0 && (
+              <ImageViewer
+                isOpen={viewerOpen}
+                mimeType={viewerEntry?.mimeType}
+                videoUrl={
+                  viewerEntry && isVideoEntry(viewerEntry) ? viewerUrl || undefined : undefined
+                }
+                imageUrl={
+                  viewerEntry && isVideoEntry(viewerEntry)
+                    ? ""
+                    : viewerUrl || (viewerEntry ? thumbnails[viewerEntry.id] || "" : "")
+                }
+                isLoadingFull={!viewerUrl}
+                imageName={viewerEntry?.name || ""}
+                imageSize={viewerEntry?.size}
+                imageDate={viewerEntry?.modifiedAt}
+                onClose={() => setViewerOpen(false)}
+                onDownload={() => {
+                  if (viewerEntry) handleDownload(viewerEntry);
+                }}
+                onPrev={() => navigateViewer(-1)}
+                onNext={() => navigateViewer(1)}
+                hasPrev={viewerIndex > 0}
+                hasNext={viewerIndex < previewableEntries.length - 1}
+              />
             )}
           </>
         )}

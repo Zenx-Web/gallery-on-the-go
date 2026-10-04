@@ -25,6 +25,8 @@ interface PhotoGridProps {
   onPhotoClick: (photo: PhotoItem) => void;
   onDownload?: (photo: PhotoItem) => void;
   selectable?: boolean;
+  /** "comfortable" (default) renders fewer, larger tiles than "compact". */
+  size?: "compact" | "comfortable";
 }
 
 function formatSize(bytes: number): string {
@@ -38,6 +40,7 @@ export default function PhotoGrid({
   onPhotoClick,
   onDownload,
   selectable = false,
+  size = "comfortable",
 }: PhotoGridProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -51,7 +54,11 @@ export default function PhotoGrid({
   };
 
   return (
-    <div className="gallery-grid">
+    <div
+      className={`gallery-grid${
+        size === "comfortable" ? " gallery-grid--comfortable" : ""
+      }`}
+    >
       {photos.map((photo, index) => {
         const isSelected = selected.has(photo.id);
 

@@ -5,7 +5,7 @@
  * Features: folder grid, photo grid, lightbox viewer, breadcrumb navigation.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import JSZip from "jszip";
 import { SOCKET_EVENTS } from "@gallery/shared";
@@ -22,6 +22,13 @@ import type { EditOptions } from "@/lib/fileTransfer";
 import { runWithConcurrency } from "@/lib/concurrency";
 
 const THUMBNAIL_CONCURRENCY = 5;
+
+type SortOrder = "newest" | "oldest";
+// Requested from the device, which otherwise resizes to its own 300px default.
+// Larger tiles would then be upscaled and blurry. A single fixed size is used
+// regardless of tile density, so toggling compact/comfortable reuses cached
+// thumbnails instead of refetching every one.
+const THUMBNAIL_REQUEST_SIZE = 512;
 const ZIP_DOWNLOAD_CONCURRENCY = 4;
 const ZIP_FILE_RETRIES = 2;
 // Files per ZIP chunk — each chunk is downloaded, finalized, and saved to
@@ -46,11 +53,14 @@ import {
   Images,
   Smartphone,
   Download,
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
 } from "lucide-react";
 
-function sortByNewest(list: FileItem[]): FileItem[] {
+function sortByCreatedAt(list: FileItem[], order: SortOrder): FileItem[] {
+  const dir = order === "oldest" ? 1 : -1;
   return [...list].sort(
-    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    (a, b) => dir * (new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime())
   );
 }
 
@@ -87,6 +97,7 @@ export default function GalleryPage() {
   const [viewerIndex, setViewerIndex] = useState(0);
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
   const [gridSize, setGridSize] = useState<"compact" | "comfortable">("comfortable");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
 
   // ─── ZIP Download States ───
   const [zipState, setZipState] = useState<{
@@ -136,7 +147,8 @@ export default function GalleryPage() {
   const fetchFolderPage = (
     folder: FolderItem,
     page: number,
-    pageSize: number
+    pageSize: number,
+    order: SortOrder
   ): Promise<{ files: FileItem[]; hasMore: boolean }> => {
     const socket = getClientSocket();
     return new Promise((resolve, reject) => {
@@ -150,7 +162,7 @@ export default function GalleryPage() {
         if (typeof data.page === "number" && data.page !== page) return;
         socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
         clearTimeout(timer);
-        resolve({ files: sortByNewest(data.files), hasMore: data.hasMore });
+        resolve({ files: sortByCreatedAt(data.files, order), hasMore: data.hasMore });
       };
 
       socket.on(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
@@ -178,12 +190,13 @@ export default function GalleryPage() {
     folder: FolderItem,
     page: number,
     pageSize: number,
+    order: SortOrder,
     retries = 3
   ): Promise<{ files: FileItem[]; hasMore: boolean }> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        return await fetchFolderPage(folder, page, pageSize);
+        return await fetchFolderPage(folder, page, pageSize, order);
       } catch (err) {
         lastErr = err;
         if (attempt < retries) await sleep(800 * (attempt + 1));
@@ -202,7 +215,7 @@ export default function GalleryPage() {
     return new Promise<FileItem[]>((resolve, reject) => {
       const onAlbumFiles = (data: { files: FileItem[] }) => {
         socket.off(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
-        resolve(sortByNewest(data.files));
+        resolve(sortByCreatedAt(data.files, "newest"));
       };
 
       socket.on(SOCKET_EVENTS.GALLERY.ALBUM_FILES_RESPONSE, onAlbumFiles);
@@ -227,24 +240,52 @@ export default function GalleryPage() {
   // ─── Load files for the open folder ───
   // Loads just the first page immediately — more pages load automatically
   // as the user scrolls near the bottom (loadMoreFiles).
+  //
+  // "First page" depends on the sort direction. The device returns an album
+  // ordered by createDate DESCENDING and pages by absolute offset, so the
+  // OLDEST files live in the LAST page. Sort ascending therefore starts at
+  // the last page and walks backwards — sorting only the pages already
+  // loaded would otherwise put the newest files on top until the user had
+  // scrolled through the entire folder.
   const openFolder = useCallback(
     (folder: FolderItem) => {
       if (!selectedDevice) return;
+      const order: SortOrder = sortOrder;
+      const backwards = order === "oldest";
+
       setCurrentFolder(folder);
       setFiles([]);
       setFilesPage(1);
       setFilesHasMore(false);
       setFilesLoading(true);
 
-      fetchFolderPageWithRetry(folder, 1, FOLDER_PAGE_SIZE)
-        .then(({ files: list, hasMore }) => {
-          // Dedup the first page for the same reason loadMoreFiles dedups
-          // subsequent ones — a device-side paged query can still surface the
-          // same id twice within a single page.
-          const seen = new Set<string>();
-          setFiles(list.filter((f) => (seen.has(f.id) ? false : seen.add(f.id))));
-          setFilesHasMore(hasMore);
-        })
+      const lastPage = Math.max(1, Math.ceil((folder.fileCount || 0) / FOLDER_PAGE_SIZE));
+
+      const loadFirst = async (page: number): Promise<void> => {
+        const { files: list, hasMore } = await fetchFolderPageWithRetry(
+          folder,
+          page,
+          FOLDER_PAGE_SIZE,
+          order
+        );
+        // fileCount is a snapshot taken when the album list was fetched. If
+        // files were added or removed since, the nominal last page can come
+        // back empty — step back until a page yields something.
+        if (backwards && list.length === 0 && page > 1) return loadFirst(page - 1);
+
+        // Dedup the first page for the same reason loadMoreFiles dedups
+        // subsequent ones — a device-side paged query can still surface the
+        // same id twice within a single page.
+        const seen = new Set<string>();
+        setFiles(list.filter((f) => (seen.has(f.id) ? false : seen.add(f.id))));
+        setFilesPage(page);
+        // Backwards, the device's hasMore reports pages *after* this one
+        // (i.e. newer), which we are not going to load — what matters is
+        // whether older pages remain, i.e. whether we are past page 1.
+        setFilesHasMore(backwards ? page > 1 : hasMore);
+      };
+
+      loadFirst(backwards ? lastPage : 1)
         .catch((err) => {
           console.error("Failed to load folder contents:", err);
           setFiles([]);
@@ -252,15 +293,29 @@ export default function GalleryPage() {
         .finally(() => setFilesLoading(false));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedDevice]
+    [selectedDevice, sortOrder]
   );
+
+  // Re-load the open folder when the sort direction changes: the page cursor
+  // is only meaningful relative to a direction, so the list is rebuilt from
+  // the correct end rather than re-sorted in place.
+  useEffect(() => {
+    if (!currentFolder || !selectedDevice) return;
+    openFolder(currentFolder);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortOrder]);
 
   const loadMoreFiles = useCallback(() => {
     if (!selectedDevice || !currentFolder || filesLoadingMore || !filesHasMore) return;
-    const nextPage = filesPage + 1;
+    const backwards = sortOrder === "oldest";
+    const nextPage = backwards ? filesPage - 1 : filesPage + 1;
+    if (nextPage < 1) {
+      setFilesHasMore(false);
+      return;
+    }
     setFilesLoadingMore(true);
 
-    fetchFolderPageWithRetry(currentFolder, nextPage, FOLDER_PAGE_SIZE)
+    fetchFolderPageWithRetry(currentFolder, nextPage, FOLDER_PAGE_SIZE, sortOrder)
       .then(({ files: list, hasMore }) => {
         // Defensive dedup — guards against any duplicate items a paged
         // device-side query might still return across page boundaries.
@@ -268,7 +323,7 @@ export default function GalleryPage() {
           const seen = new Set(prev.map((f) => f.id));
           return [...prev, ...list.filter((f) => !seen.has(f.id))];
         });
-        setFilesHasMore(hasMore);
+        setFilesHasMore(backwards ? nextPage > 1 : hasMore);
         setFilesPage(nextPage);
       })
       .catch((err) => {
@@ -281,7 +336,7 @@ export default function GalleryPage() {
       })
       .finally(() => setFilesLoadingMore(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDevice, currentFolder, filesPage, filesLoadingMore, filesHasMore]);
+  }, [selectedDevice, currentFolder, filesPage, filesLoadingMore, filesHasMore, sortOrder]);
 
   const handleBack = () => {
     setCurrentFolder(null);
@@ -321,7 +376,12 @@ export default function GalleryPage() {
     runWithConcurrency(pendingFiles, THUMBNAIL_CONCURRENCY, async (file) => {
       if (cancelled) return;
       try {
-        const url = await manager.requestThumbnail(selectedDevice.id, file.id);
+        const url = await manager.requestThumbnail(
+          selectedDevice.id,
+          file.id,
+          THUMBNAIL_REQUEST_SIZE,
+          THUMBNAIL_REQUEST_SIZE
+        );
         if (cancelled) return;
         thumbnailUrlsRef.current.push(url);
         setThumbnails((prev) => ({ ...prev, [file.id]: url }));
@@ -344,7 +404,16 @@ export default function GalleryPage() {
     };
   }, []);
 
-  const photos: PhotoItem[] = files.map((f) => ({
+  // The display order. `photos` and the lightbox must both be indexed off this
+  // same array, or clicking a tile after re-sorting opens the wrong file.
+  const sortedFiles = useMemo(() => {
+    const time = (f: FileItem) => new Date(f.createdAt || 0).getTime();
+    return [...files].sort((a, b) =>
+      sortOrder === "oldest" ? time(a) - time(b) : time(b) - time(a)
+    );
+  }, [files, sortOrder]);
+
+  const photos: PhotoItem[] = sortedFiles.map((f) => ({
     ...fileToPhoto(f),
     thumbnailUrl: thumbnails[f.id] || "",
   }));
@@ -358,7 +427,7 @@ export default function GalleryPage() {
 
   const loadViewerImage = async (index: number) => {
     if (!selectedDevice) return;
-    const file = files[index];
+    const file = sortedFiles[index];
     if (!file) return;
 
     setViewerUrl(null);
@@ -440,8 +509,8 @@ export default function GalleryPage() {
       });
       if (viewerOpen && photos[viewerIndex]?.id === photo.id) {
         // Fetch directly by the new id rather than re-running
-        // loadViewerImage(viewerIndex) — the `files` array in this closure
-        // is still the pre-edit snapshot until the next render.
+        // loadViewerImage(viewerIndex) — the sorted list in this closure is
+        // still the pre-edit snapshot until the next render.
         setViewerUrl(null);
         try {
           const { blob } = await manager.requestFile(selectedDevice.id, newFile.id);
@@ -689,6 +758,33 @@ export default function GalleryPage() {
               </button>
               <div className="flex items-center gap-1">
                 <button
+                  onClick={() => setSortOrder("newest")}
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                    sortOrder === "newest"
+                      ? "bg-[var(--color-accent-primary)]/15 text-[var(--color-accent-primary)]"
+                      : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
+                  }`}
+                  title="Newest first"
+                  aria-label="Sort newest first"
+                >
+                  <ArrowDownWideNarrow className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setSortOrder("oldest")}
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                    sortOrder === "oldest"
+                      ? "bg-[var(--color-accent-primary)]/15 text-[var(--color-accent-primary)]"
+                      : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
+                  }`}
+                  title="Oldest first"
+                  aria-label="Sort oldest first"
+                >
+                  <ArrowUpNarrowWide className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="w-px h-5 bg-[var(--color-border-subtle)]" />
+              <div className="flex items-center gap-1">
+                <button
                   onClick={() => setGridSize("compact")}
                   className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
                     gridSize === "compact"
@@ -755,7 +851,12 @@ export default function GalleryPage() {
                 </div>
               ) : (
                 <>
-                  <PhotoGrid photos={photos} onPhotoClick={openViewer} onDownload={handleDownload} />
+                  <PhotoGrid
+                    photos={photos}
+                    onPhotoClick={openViewer}
+                    onDownload={handleDownload}
+                    size={gridSize}
+                  />
                   {/* Sentinel — loads the next page automatically once it scrolls
                       into view, instead of fetching the whole (possibly
                       thousands-of-files) folder up front. */}
