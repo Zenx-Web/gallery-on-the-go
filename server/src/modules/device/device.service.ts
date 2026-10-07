@@ -105,11 +105,20 @@ export async function getDeviceById(id: string): Promise<Device | null> {
 }
 
 /**
- * Validate a device token. Returns the device if valid.
- * If the token is unrecognized but looks like a valid device token (dev_*),
- * adopt it onto an orphaned device (one with no active socket) so that a
- * previously removed-and-re-added device can reconnect without manual
- * intervention on the phone.
+ * Validate a device token. Returns the device if valid, otherwise null.
+ *
+ * An unrecognized token is rejected outright — it is never adopted onto
+ * another device's row.
+ *
+ * The Android app persists (deviceId, deviceToken) locally and only
+ * registers when it has none, so a device removed from the dashboard keeps
+ * reconnecting with a token whose row no longer exists. Rebinding that token
+ * to an idle device's row hands the connecting phone *another* device's
+ * identity: the dashboard reports the wrong device online, and the real
+ * owner of that row can never reconnect because its own token was
+ * overwritten. Rejecting instead lets the app's onAuthFailed path fire
+ * (apps/android/lib/services/socket_service.dart), which clears the stale
+ * credentials and registers a fresh row under its own name.
  */
 export async function validateDeviceToken(token: string): Promise<Device | null> {
   const { data, error } = await supabase
@@ -119,46 +128,11 @@ export async function validateDeviceToken(token: string): Promise<Device | null>
     .eq('is_active', true)
     .maybeSingle();
 
-  if (!error && data) {
-    return mapDbToDevice(data);
+  if (error || !data) {
+    return null;
   }
 
-  // Token not found — try to adopt it onto an orphaned device
-  if (token.startsWith('dev_')) {
-    const disconnectedIds = await getOrphanedDeviceIds();
-    if (disconnectedIds.length > 0) {
-      const { data: adopted, error: adoptErr } = await supabase
-        .from('devices')
-        .update({ device_token: token })
-        .eq('id', disconnectedIds[0])
-        .eq('is_active', true)
-        .select()
-        .single();
-
-      if (!adoptErr && adopted) {
-        console.log(`  🔗 Adopted stale token onto device: ${adopted.device_name}`);
-        return mapDbToDevice(adopted);
-      }
-    }
-  }
-
-  return null;
-}
-
-/**
- * Find devices that have no active socket connection — candidates for
- * token adoption when a stale token connects.
- */
-async function getOrphanedDeviceIds(): Promise<string[]> {
-  const { data } = await supabase
-    .from('devices')
-    .select('id')
-    .eq('is_active', true);
-
-  if (!data) return [];
-  return data
-    .map((d) => d.id)
-    .filter((id) => !connectedDevices.has(id));
+  return mapDbToDevice(data);
 }
 
 /**
