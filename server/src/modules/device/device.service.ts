@@ -21,18 +21,36 @@ export async function registerDevice(
   deviceModel: string | null,
   androidVersion: string | null
 ): Promise<{ device: Device; token: string; isNew: boolean }> {
-  // Check if device already exists by name + model
-  const { data: existing } = await supabase
+  // Match existing rows by name + model, oldest first. Deliberately NOT
+  // `.maybeSingle()`: two rows can legitimately share a name+model (see below),
+  // and `maybeSingle` reports that as an error with null data — which would make
+  // every later registration insert yet another row.
+  const { data: candidates } = await supabase
     .from('devices')
     .select('*')
     .eq('device_name', deviceName)
     .eq('device_model', deviceModel ?? '')
-    .maybeSingle();
+    .order('created_at', { ascending: true });
 
-  if (existing) {
+  // Reuse the oldest row that nothing is connected on.
+  //
+  // The app persists its install suffix separately from its credentials
+  // (device_registration_service.dart), so a device recovering from an auth
+  // failure re-registers under the *same* name and must get its old row back.
+  // A genuinely recovering device is offline — its socket just failed — so an
+  // idle row is the normal case.
+  //
+  // A row that is currently connected is being actively used by another phone.
+  // Returning its token here would make both phones share one identity, which
+  // is exactly the reported fault: the dashboard showed one device online while
+  // a different phone served the media. Falling through gives this caller its
+  // own row instead.
+  const reusable = (candidates ?? []).find((row) => !getDeviceSocketId(row.id));
+
+  if (reusable) {
     return {
-      device: mapDbToDevice(existing),
-      token: existing.device_token,
+      device: mapDbToDevice(reusable),
+      token: reusable.device_token,
       isNew: false,
     };
   }
@@ -146,6 +164,31 @@ export async function updateFcmToken(deviceId: string, fcmToken: string): Promis
 
   if (error) {
     throw new Error(`Failed to update FCM token: ${error.message}`);
+  }
+}
+
+/**
+ * Forget a device's FCM token.
+ *
+ * Called when FCM reports the token as permanently unregistered — the app was
+ * uninstalled, or the installation rotated its token. Clearing it stops the
+ * dashboard from offering a wake-up that can never be delivered, and makes
+ * `POST /api/devices/:id/wake` answer honestly instead of reporting a
+ * `wake_sent` that went nowhere.
+ *
+ * `is_active` is deliberately left alone: it gates socket authentication
+ * (validateDeviceToken), so clearing it here would lock the device out when it
+ * is reinstalled and re-registers under the same name — which is the exact
+ * recovery path the app takes after an auth failure.
+ */
+export async function clearFcmToken(deviceId: string): Promise<void> {
+  const { error } = await supabase
+    .from('devices')
+    .update({ fcm_token: null })
+    .eq('id', deviceId);
+
+  if (error) {
+    console.error(`Failed to clear FCM token for device ${deviceId}:`, error.message);
   }
 }
 

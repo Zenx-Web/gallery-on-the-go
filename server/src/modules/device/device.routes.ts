@@ -19,6 +19,7 @@ import {
   updateFcmToken,
   validateDeviceToken,
   getDeviceSocketId,
+  clearFcmToken,
 } from './device.service.js';
 import { wakeDevice } from '../relay/fcm.service.js';
 
@@ -235,10 +236,25 @@ router.post('/:id/wake', authenticate, async (req: AuthenticatedRequest, res: Re
       return;
     }
 
-    const sent = await wakeDevice(device.fcmToken, deviceId);
+    const result = await wakeDevice(device.fcmToken, deviceId);
+
+    if (result.unregistered) {
+      // The token is dead: the app is gone from that device (uninstalled, or the
+      // installation rotated its token). Forget it so the dashboard stops
+      // offering a wake that cannot land, and say so plainly rather than
+      // reporting another silent `wake_sent`.
+      await clearFcmToken(deviceId);
+      res.json({
+        success: false,
+        data: { status: 'fcm_unregistered' },
+        error: 'The app is no longer installed on that device. Open it on the device once to reconnect.',
+      });
+      return;
+    }
+
     res.json({
-      success: sent,
-      data: { status: sent ? 'wake_sent' : 'fcm_failed' },
+      success: result.ok,
+      data: { status: result.ok ? 'wake_sent' : 'fcm_failed' },
     });
   } catch (err) {
     res.status(500).json({ success: false, error: (err as Error).message });

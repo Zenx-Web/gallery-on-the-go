@@ -22,6 +22,7 @@ import {
   updateLastSeen,
   getDeviceSocketId,
   getDeviceById,
+  clearFcmToken,
 } from '../device/device.service.js';
 import { sendFcmMessage } from '../relay/fcm.service.js';
 import type { AdminTokenPayload } from '../../middleware/auth.middleware.js';
@@ -215,7 +216,15 @@ function handleDeviceConnection(socket: Socket) {
         const dbDevice = await getDeviceById(device.id);
         if (dbDevice?.fcmToken) {
           console.log(`  📲 Auto-waking ${device.deviceName} via FCM...`);
-          await sendFcmMessage(dbDevice.fcmToken, { deviceId: device.id, action: 'reconnect' });
+          const result = await sendFcmMessage(dbDevice.fcmToken, {
+            deviceId: device.id,
+            action: 'reconnect',
+          });
+          // The app is gone from that device — drop the dead token so we stop
+          // pushing to it on every disconnect.
+          if (result.unregistered) {
+            await clearFcmToken(device.id);
+          }
         }
       }, 10_000);
     }

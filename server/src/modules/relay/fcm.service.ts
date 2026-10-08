@@ -37,17 +37,33 @@ function getAuth(): GoogleAuth | null {
 }
 
 /**
+ * Outcome of a single FCM send.
+ *
+ * `ok` means FCM *accepted* the message for delivery — not that the phone
+ * received it. Delivery still needs the device to be online and the app to not
+ * be force-stopped, which is why the `ttl` below matters.
+ *
+ * `unregistered` means the token is dead permanently (404 UNREGISTERED /
+ * NOT_FOUND, or a rejected token): the app was uninstalled, or the installation
+ * rotated its token. Retrying can never succeed.
+ */
+export type FcmSendResult = {
+  ok: boolean;
+  unregistered: boolean;
+};
+
+/**
  * Send a high-priority FCM data message to a device.
  * Uses FCM HTTP V1 API (not the deprecated Legacy API).
  */
 export async function sendFcmMessage(
   fcmToken: string,
   payload: { deviceId: string; action: 'wake' | 'reconnect' }
-): Promise<boolean> {
+): Promise<FcmSendResult> {
   const auth = getAuth();
   if (!auth) {
     console.warn('  ⚠️  FIREBASE_SERVICE_ACCOUNT not configured — skipping FCM push');
-    return false;
+    return { ok: false, unregistered: false };
   }
 
   try {
@@ -81,7 +97,13 @@ export async function sendFcmMessage(
           },
           android: {
             priority: 'HIGH',
-            ttl: '60s',
+            // A wake exists for the case where the phone was NOT reachable —
+            // asleep in Doze, powered off, or out of signal. A 60s TTL expires
+            // before most of those devices come back, and FCM then drops the
+            // message silently: the send still reports success, so the dashboard
+            // showed a wake that never happened. 24h keeps it queued until the
+            // phone is reachable again (FCM's own ceiling is 4 weeks).
+            ttl: '86400s',
           },
         },
       }),
@@ -89,29 +111,45 @@ export async function sendFcmMessage(
 
     if (!response.ok) {
       const errorText = await response.text();
+      // Separate "this token is dead forever" from a transient failure:
+      //   404 UNREGISTERED / NOT_FOUND — app uninstalled, or the installation
+      //       rotated its token.
+      //   400 INVALID_ARGUMENT — malformed or stale token.
+      // Retrying cannot help in either case, and the caller needs to know so it
+      // can forget the token rather than report a wake that never happened.
+      const unregistered =
+        response.status === 404 ||
+        errorText.includes('UNREGISTERED') ||
+        errorText.includes('NOT_FOUND') ||
+        errorText.includes('INVALID_ARGUMENT');
+
       console.error(`  ❌ FCM V1 send failed (${response.status}):`, errorText);
-      return false;
+      return { ok: false, unregistered };
     }
 
     console.log(`  📲 FCM V1 wake sent to device ${payload.deviceId}`);
-    return true;
+    return { ok: true, unregistered: false };
   } catch (err) {
     console.error('  ❌ FCM V1 send error:', err);
-    return false;
+    return { ok: false, unregistered: false };
   }
 }
 
 /**
  * Send a wake-up notification with retry logic.
+ *
+ * Retries transient failures only. A permanently dead token (`unregistered`) is
+ * returned on the first attempt — retrying it three times would just delay the
+ * caller's chance to forget the token.
  */
 export async function wakeDevice(
   fcmToken: string,
   deviceId: string,
   maxRetries = 3
-): Promise<boolean> {
+): Promise<FcmSendResult> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const success = await sendFcmMessage(fcmToken, { deviceId, action: 'wake' });
-    if (success) return true;
+    const result = await sendFcmMessage(fcmToken, { deviceId, action: 'wake' });
+    if (result.ok || result.unregistered) return result;
 
     if (attempt < maxRetries) {
       const delay = Math.pow(2, attempt) * 1000;
@@ -121,5 +159,5 @@ export async function wakeDevice(
   }
 
   console.error(`  ❌ Failed to wake device ${deviceId} after ${maxRetries} attempts`);
-  return false;
+  return { ok: false, unregistered: false };
 }
