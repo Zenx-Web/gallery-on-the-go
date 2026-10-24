@@ -158,10 +158,21 @@ export default function ImageViewer({
     };
   }, [isOpen, handleKeyDown]);
 
-  // Reset zoom on image change
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Dragging and Pinching refs
+  const dragStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const pinchStartDistRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef<number>(1);
+  const isPinchingRef = useRef<boolean>(false);
+  const touchStartX = useRef<number | null>(null);
+
+  // Reset zoom & pan on image change
   useEffect(() => {
     setTimeout(() => {
       setZoom(1);
+      setPan({ x: 0, y: 0 });
     }, 0);
   }, [imageUrl]);
 
@@ -179,7 +190,9 @@ export default function ImageViewer({
       const step = e.deltaY < 0 ? 0.2 : -0.2;
       setZoom((z) => {
         const next = Math.round((z + step) * 100) / 100;
-        return Math.min(Math.max(next, 0.5), 5);
+        const clamped = Math.min(Math.max(next, 0.5), 5);
+        if (clamped <= 1) setPan({ x: 0, y: 0 });
+        return clamped;
       });
     };
 
@@ -189,25 +202,135 @@ export default function ImageViewer({
     };
   }, [isOpen, isVideo]);
 
-  const touchStartX = useRef<number | null>(null);
-
+  // ─── Touch Handling (Pinch-to-zoom + Pan + Swipe) ───
   const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX;
+    if (isVideo) return;
+
+    if (e.touches.length === 2) {
+      // 2 fingers: Pinch to zoom
+      isPinchingRef.current = true;
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      pinchStartDistRef.current = dist;
+      pinchStartZoomRef.current = zoom;
+      return;
+    }
+
+    if (e.touches.length === 1) {
+      isPinchingRef.current = false;
+      const t = e.touches[0];
+      touchStartX.current = t.clientX;
+
+      if (zoom > 1) {
+        // 1 finger when zoomed in: Pan the image
+        setIsDragging(true);
+        dragStartRef.current = {
+          x: t.clientX,
+          y: t.clientY,
+          panX: pan.x,
+          panY: pan.y,
+        };
+      }
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (isVideo) return;
+
+    if (e.touches.length === 2 && pinchStartDistRef.current !== null) {
+      // Pinching in progress
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      const scaleDelta = dist / pinchStartDistRef.current;
+      const nextZoom = Math.min(Math.max(pinchStartZoomRef.current * scaleDelta, 0.8), 5);
+      setZoom(Math.round(nextZoom * 100) / 100);
+      return;
+    }
+
+    if (e.touches.length === 1 && zoom > 1 && dragStartRef.current) {
+      // Panning while zoomed in
+      const t = e.touches[0];
+      const dx = t.clientX - dragStartRef.current.x;
+      const dy = t.clientY - dragStartRef.current.y;
+      setPan({
+        x: dragStartRef.current.panX + dx,
+        y: dragStartRef.current.panY + dy,
+      });
+    }
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    if (touchStartX.current === null) return;
-    const touchEndX = e.changedTouches[0].clientX;
-    const diffX = touchStartX.current - touchEndX;
+    if (isVideo) return;
 
-    if (Math.abs(diffX) > 50) {
-      if (diffX > 0 && hasNext && onNext) {
-        onNext();
-      } else if (diffX < 0 && hasPrev && onPrev) {
-        onPrev();
+    if (isPinchingRef.current) {
+      if (e.touches.length < 2) {
+        pinchStartDistRef.current = null;
+        isPinchingRef.current = false;
+        if (zoom < 1) {
+          setZoom(1);
+          setPan({ x: 0, y: 0 });
+        }
+      }
+      return;
+    }
+
+    if (zoom > 1) {
+      setIsDragging(false);
+      dragStartRef.current = null;
+      touchStartX.current = null;
+      return;
+    }
+
+    // Normal swipe for prev/next (only when zoom === 1)
+    if (touchStartX.current !== null && e.changedTouches.length > 0) {
+      const touchEndX = e.changedTouches[0].clientX;
+      const diffX = touchStartX.current - touchEndX;
+
+      if (Math.abs(diffX) > 50) {
+        if (diffX > 0 && hasNext && onNext) {
+          onNext();
+        } else if (diffX < 0 && hasPrev && onPrev) {
+          onPrev();
+        }
       }
     }
     touchStartX.current = null;
+    setIsDragging(false);
+    dragStartRef.current = null;
+  };
+
+  // ─── Mouse Drag Panning (when zoom > 1 on desktop) ───
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (isVideo || zoom <= 1) return;
+    if (e.button !== 0) return;
+    e.preventDefault();
+    setIsDragging(true);
+    dragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      panX: pan.x,
+      panY: pan.y,
+    };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging || !dragStartRef.current || zoom <= 1) return;
+    e.preventDefault();
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    setPan({
+      x: dragStartRef.current.panX + dx,
+      y: dragStartRef.current.panY + dy,
+    });
+  };
+
+  const handleMouseUp = () => {
+    if (isDragging) {
+      setIsDragging(false);
+      dragStartRef.current = null;
+    }
   };
 
   return (
@@ -222,7 +345,9 @@ export default function ImageViewer({
           className="lightbox-backdrop"
           onClick={onClose}
           onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
         >
           {/* Top Controls */}
           <motion.div
@@ -251,17 +376,30 @@ export default function ImageViewer({
               {!isVideo && (
                 <div className="hidden sm:flex items-center gap-1">
                   <button
-                    onClick={() => setZoom((z) => Math.max(z - 0.25, 0.5))}
+                    onClick={() => {
+                      const next = Math.max(zoom - 0.25, 0.5);
+                      setZoom(next);
+                      if (next <= 1) setPan({ x: 0, y: 0 });
+                    }}
                     className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all min-w-[36px] min-h-[36px]"
+                    title="Zoom Out"
                   >
                     <ZoomOut className="w-4 h-4 text-white" />
                   </button>
-                  <span className="text-xs text-white/60 font-mono w-12 text-center">
-                    {Math.round(zoom * 100)}%
-                  </span>
                   <button
-                    onClick={() => setZoom((z) => Math.min(z + 0.25, 4))}
+                    onClick={() => {
+                      setZoom(1);
+                      setPan({ x: 0, y: 0 });
+                    }}
+                    className="text-xs text-white/70 hover:text-white font-mono w-14 text-center py-1 rounded hover:bg-white/10 transition-colors"
+                    title="Click to reset zoom (100%)"
+                  >
+                    {Math.round(zoom * 100)}%
+                  </button>
+                  <button
+                    onClick={() => setZoom((z) => Math.min(z + 0.25, 5))}
                     className="w-9 h-9 rounded-xl glass-sm flex items-center justify-center hover:bg-white/10 transition-all min-w-[36px] min-h-[36px]"
+                    title="Zoom In"
                   >
                     <ZoomIn className="w-4 h-4 text-white" />
                   </button>
@@ -336,8 +474,11 @@ export default function ImageViewer({
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}
             transition={{ duration: 0.25, ease: "easeOut" }}
-            className="max-w-[95vw] max-h-[85vh] overflow-auto"
+            className="relative flex items-center justify-center max-w-[95vw] max-h-[85vh] overflow-visible"
             onClick={(e) => e.stopPropagation()}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
           >
             {isVideo ? (
               videoUrl ? (
@@ -370,7 +511,7 @@ export default function ImageViewer({
                 </div>
               )
             ) : (
-              <div className="relative">
+              <div className="relative flex items-center justify-center">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={imgError && fallbackUrl ? fallbackUrl : (imageUrl || fallbackUrl || "")}
@@ -380,13 +521,27 @@ export default function ImageViewer({
                       setImgError(true);
                     }
                   }}
-                  style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}
-                  className={`max-w-full max-h-[85vh] object-contain transition-transform duration-200 rounded-lg select-none ${
-                    zoom > 1 ? "cursor-zoom-out" : "cursor-zoom-in"
+                  style={{
+                    transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
+                    transformOrigin: "center center",
+                    transition: isDragging ? "none" : "transform 0.15s ease-out",
+                    touchAction: "none",
+                  }}
+                  className={`max-w-[90vw] max-h-[85vh] object-contain rounded-lg select-none ${
+                    zoom > 1
+                      ? isDragging
+                        ? "cursor-grabbing"
+                        : "cursor-grab"
+                      : "cursor-zoom-in"
                   }`}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
-                    setZoom((z) => (z > 1 ? 1 : 2.5));
+                    if (zoom > 1) {
+                      setZoom(1);
+                      setPan({ x: 0, y: 0 });
+                    } else {
+                      setZoom(2.5);
+                    }
                   }}
                   draggable={false}
                 />
