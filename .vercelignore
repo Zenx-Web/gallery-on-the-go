@@ -1,0 +1,9 @@
+node_modules
+apps/android
+.git
+database
+docs
+scripts
+.claude
+.env
+*.md
