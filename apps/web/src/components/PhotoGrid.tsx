@@ -90,7 +90,7 @@ export default function PhotoGrid({
               duration: 0.35,
               ease: "easeOut",
             }}
-            className={`gallery-item ${
+            className={`gallery-item group relative ${
               isSelected ? "ring-2 ring-[var(--color-accent-primary)] ring-offset-2 ring-offset-[var(--color-bg-primary)]" : ""
             }`}
             onClick={() =>
@@ -153,20 +153,29 @@ export default function PhotoGrid({
               </div>
             )}
 
-            {/* Selection Checkbox — always visible in select mode */}
-            {selectable && (
-              <div className="absolute top-2 left-2 z-10">
-                <div
-                  className={`w-6 h-6 rounded-md flex items-center justify-center transition-all shadow-md ${
-                    isSelected
-                      ? "bg-[var(--color-accent-primary)] border-2 border-[var(--color-accent-primary)]"
-                      : "bg-black/40 border-2 border-white/40 backdrop-blur-sm hover:border-white/60"
-                  }`}
-                >
-                  {isSelected && <Check className="w-3.5 h-3.5 text-white" />}
-                </div>
+            {/* Selection Checkbox — always visible in select mode OR visible on hover in normal mode */}
+            <div
+              className={`absolute top-2 left-2 z-20 transition-all duration-150 ${
+                selectable || isSelected
+                  ? "opacity-100 scale-100 pointer-events-auto"
+                  : "opacity-0 group-hover:opacity-100 scale-95 group-hover:scale-100 pointer-events-none group-hover:pointer-events-auto"
+              }`}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleSelect(photo.id);
+              }}
+            >
+              <div
+                className={`w-6 h-6 rounded-md flex items-center justify-center transition-all shadow-md cursor-pointer ${
+                  isSelected
+                    ? "bg-[var(--color-accent-primary)] border-2 border-[var(--color-accent-primary)]"
+                    : "bg-black/50 hover:bg-black/70 border-2 border-white/60 hover:border-white backdrop-blur-sm"
+                }`}
+                title={isSelected ? "Deselect" : "Select photo"}
+              >
+                {isSelected && <Check className="w-3.5 h-3.5 text-white" />}
               </div>
-            )}
+            </div>
 
             {/* File name badge in select mode (bottom overlay) */}
             {selectable && (

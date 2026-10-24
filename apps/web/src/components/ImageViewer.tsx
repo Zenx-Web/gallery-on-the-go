@@ -165,6 +165,30 @@ export default function ImageViewer({
     }, 0);
   }, [imageUrl]);
 
+  const backdropRef = useRef<HTMLDivElement>(null);
+
+  // ─── Scroll Zooming (Mouse Wheel / Trackpad) ───
+  useEffect(() => {
+    const el = backdropRef.current;
+    if (!el || !isOpen || isVideo) return;
+
+    const onWheel = (e: WheelEvent) => {
+      // Prevent page scrolling and smoothly zoom image
+      e.preventDefault();
+      e.stopPropagation();
+      const step = e.deltaY < 0 ? 0.2 : -0.2;
+      setZoom((z) => {
+        const next = Math.round((z + step) * 100) / 100;
+        return Math.min(Math.max(next, 0.5), 5);
+      });
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, [isOpen, isVideo]);
+
   const touchStartX = useRef<number | null>(null);
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -190,6 +214,7 @@ export default function ImageViewer({
     <AnimatePresence>
       {isOpen && (
         <motion.div
+          ref={backdropRef}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -356,7 +381,13 @@ export default function ImageViewer({
                     }
                   }}
                   style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}
-                  className="max-w-full max-h-[85vh] object-contain transition-transform duration-200 rounded-lg select-none"
+                  className={`max-w-full max-h-[85vh] object-contain transition-transform duration-200 rounded-lg select-none ${
+                    zoom > 1 ? "cursor-zoom-out" : "cursor-zoom-in"
+                  }`}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    setZoom((z) => (z > 1 ? 1 : 2.5));
+                  }}
                   draggable={false}
                 />
                 {isLoadingFull && (

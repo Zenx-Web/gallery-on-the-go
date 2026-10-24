@@ -61,6 +61,7 @@ import {
   CheckCheck,
   Minimize2,
   Maximize2,
+  FileArchive,
 } from "lucide-react";
 
 function sortByCreatedAt(list: FileItem[], order: SortOrder): FileItem[] {
@@ -374,6 +375,93 @@ export default function GalleryPage() {
 
   const deselectAll = () => {
     setSelectedIds(new Set());
+  };
+
+  // Directly downloads the selected photos as individual files (not in a ZIP)
+  const downloadSelectedDirectly = async () => {
+    if (!selectedDevice || selectedIds.size === 0) return;
+
+    const selectedFiles = sortedFiles.filter((f) => selectedIds.has(f.id));
+    if (selectedFiles.length === 0) return;
+
+    setZipState({
+      active: true,
+      title: `Downloading ${selectedFiles.length} Files`,
+      status: `Preparing to download ${selectedFiles.length} files...`,
+      current: 0,
+      total: selectedFiles.length,
+      percentage: 0,
+    });
+    cancelledRef.current = false;
+
+    const statusSocket = getClientSocket();
+    const onDeviceStatusChange = (data: { deviceId: string; status: string }) => {
+      if (data.deviceId === selectedDevice.id && data.status === "offline") {
+        cancelledRef.current = true;
+        setZipState((prev) => ({ ...prev, status: "Device disconnected — download stopped" }));
+      }
+    };
+    statusSocket.on(SOCKET_EVENTS.DEVICE.STATUS_CHANGE, onDeviceStatusChange);
+
+    const socket = getClientSocket();
+    const manager = getFileTransferManager(socket);
+    let downloadedCount = 0;
+
+    try {
+      for (let i = 0; i < selectedFiles.length; i++) {
+        if (cancelledRef.current) break;
+        const file = selectedFiles[i];
+
+        setZipState((prev) => ({
+          ...prev,
+          active: true,
+          status: `Downloading (${i + 1}/${selectedFiles.length}): ${file.name}...`,
+          current: downloadedCount,
+          total: selectedFiles.length,
+          percentage: Math.round((downloadedCount / selectedFiles.length) * 100),
+        }));
+
+        let fileBlob: Blob | null = null;
+        let outName = file.name || `photo_${file.id}`;
+
+        for (let attempt = 0; attempt <= ZIP_FILE_RETRIES; attempt++) {
+          if (cancelledRef.current) break;
+          try {
+            const { blob, fileName } = await manager.requestFile(selectedDevice.id, file.id);
+            fileBlob = blob;
+            if (fileName) outName = fileName;
+            break;
+          } catch (fileErr) {
+            if (attempt < ZIP_FILE_RETRIES) await sleep(500 * (attempt + 1));
+          }
+        }
+
+        if (fileBlob && !cancelledRef.current) {
+          downloadBlob(fileBlob, outName);
+          downloadedCount++;
+          setZipState((prev) => ({
+            ...prev,
+            current: downloadedCount,
+            percentage: Math.round((downloadedCount / selectedFiles.length) * 100),
+          }));
+          if (i < selectedFiles.length - 1) {
+            await sleep(250);
+          }
+        }
+      }
+
+      if (!cancelledRef.current) {
+        setSelectedIds(new Set());
+        setSelectMode(false);
+      }
+    } catch (err) {
+      console.error("Direct download failed:", err);
+      alert((err as Error).message || "An error occurred while downloading files.");
+    } finally {
+      statusSocket.off(SOCKET_EVENTS.DEVICE.STATUS_CHANGE, onDeviceStatusChange);
+      setZipState({ active: false, title: "", status: "", current: 0, total: 0, percentage: 0 });
+      setZipMinimized(false);
+    }
   };
 
   // Downloads the currently selected photos as a chunked ZIP, reusing
@@ -969,13 +1057,13 @@ export default function GalleryPage() {
                 </div>
               ) : (
                 <>
-                  {/* ─── Selection toolbar ─── */}
+                  {/* ─── Selection toolbar (sticky when scrolling) ─── */}
                   {selectMode && (
                     <motion.div
                       initial={{ opacity: 0, y: -8 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -8 }}
-                      className="mb-4 flex flex-wrap items-center gap-3 p-3 rounded-xl bg-[var(--color-surface-glass)] border border-[var(--color-border-subtle)] backdrop-blur-md"
+                      className="sticky top-20 z-30 mb-4 flex flex-wrap items-center gap-3 p-3 rounded-xl bg-[var(--color-surface-glass)]/95 border border-[var(--color-border-subtle)] shadow-xl backdrop-blur-xl"
                     >
                       <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
                         <CheckSquare className="w-4 h-4 text-[var(--color-accent-primary)]" />
@@ -1004,17 +1092,42 @@ export default function GalleryPage() {
 
                       <div className="flex-1" />
 
+                      {/* Direct Download Files (primary) */}
                       <button
-                        onClick={downloadSelectedAsZip}
+                        onClick={downloadSelectedDirectly}
                         disabled={selectedIds.size === 0}
                         className={`text-xs font-bold flex items-center gap-2 py-1.5 px-4 rounded-lg border transition-all ${
                           selectedIds.size > 0
-                            ? "border-[var(--color-accent-primary)] bg-[var(--color-accent-primary)]/15 text-[var(--color-accent-primary)] hover:bg-[var(--color-accent-primary)]/25"
+                            ? "border-[var(--color-accent-primary)] bg-[var(--color-accent-primary)] text-white hover:opacity-90 shadow-sm"
                             : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] cursor-not-allowed opacity-50"
                         }`}
+                        title="Download selected photos directly to your computer as individual files"
                       >
                         <Download className="w-3.5 h-3.5" />
-                        Download {selectedIds.size > 0 ? `${selectedIds.size} ` : ""}Selected
+                        Download {selectedIds.size > 0 ? `${selectedIds.size} ` : ""}Files
+                      </button>
+
+                      {/* Download as ZIP (secondary) */}
+                      <button
+                        onClick={downloadSelectedAsZip}
+                        disabled={selectedIds.size === 0}
+                        className={`text-xs font-bold flex items-center gap-2 py-1.5 px-3 rounded-lg border transition-all ${
+                          selectedIds.size > 0
+                            ? "border-[var(--color-border-subtle)] bg-[var(--color-surface-glass)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-accent-primary)]/50"
+                            : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] cursor-not-allowed opacity-50"
+                        }`}
+                        title="Download selected photos packaged in a ZIP archive"
+                      >
+                        <FileArchive className="w-3.5 h-3.5" />
+                        ZIP
+                      </button>
+
+                      <button
+                        onClick={toggleSelectMode}
+                        className="p-1.5 rounded-lg text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-glass-hover)] transition-colors ml-1"
+                        title="Cancel selection mode"
+                      >
+                        <X className="w-3.5 h-3.5" />
                       </button>
                     </motion.div>
                   )}
@@ -1025,7 +1138,12 @@ export default function GalleryPage() {
                     onDownload={handleDownload}
                     selectable={selectMode}
                     selectedIds={selectedIds}
-                    onSelectionChange={setSelectedIds}
+                    onSelectionChange={(newSelected) => {
+                      setSelectedIds(newSelected);
+                      if (newSelected.size > 0 && !selectMode) {
+                        setSelectMode(true);
+                      }
+                    }}
                     size={gridSize}
                   />
                   {/* Sentinel — loads the next page automatically once it scrolls
