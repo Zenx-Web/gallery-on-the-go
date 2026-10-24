@@ -17,7 +17,7 @@ import ImageViewer from "@/components/ImageViewer";
 import EmptyState from "@/components/EmptyState";
 import { useDevices } from "@/contexts/DeviceContext";
 import { getClientSocket } from "@/lib/socket";
-import { getFileTransferManager, downloadBlob } from "@/lib/fileTransfer";
+import { getFileTransferManager, downloadBlob, isHeicFile } from "@/lib/fileTransfer";
 import type { EditOptions } from "@/lib/fileTransfer";
 import { runWithConcurrency } from "@/lib/concurrency";
 
@@ -55,6 +55,10 @@ import {
   Download,
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
+  CheckSquare,
+  Square,
+  X,
+  CheckCheck,
 } from "lucide-react";
 
 function sortByCreatedAt(list: FileItem[], order: SortOrder): FileItem[] {
@@ -98,6 +102,10 @@ export default function GalleryPage() {
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
   const [gridSize, setGridSize] = useState<"compact" | "comfortable">("comfortable");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+
+  // ─── Multi-select mode states ───
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // ─── ZIP Download States ───
   const [zipState, setZipState] = useState<{
@@ -343,6 +351,71 @@ export default function GalleryPage() {
     setFiles([]);
     setFilesPage(1);
     setFilesHasMore(false);
+    // Exit select mode when going back to folder view
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const toggleSelectMode = () => {
+    setSelectMode((prev) => {
+      if (prev) setSelectedIds(new Set()); // clear on exit
+      return !prev;
+    });
+  };
+
+  const selectAll = () => {
+    setSelectedIds(new Set(sortedFiles.map((f) => f.id)));
+  };
+
+  const deselectAll = () => {
+    setSelectedIds(new Set());
+  };
+
+  // Downloads the currently selected photos as a chunked ZIP, reusing
+  // the same downloadChunkToZip infrastructure used for full-folder ZIPs.
+  const downloadSelectedAsZip = async () => {
+    if (!selectedDevice || selectedIds.size === 0) return;
+
+    const selectedFiles = sortedFiles.filter((f) => selectedIds.has(f.id));
+    if (selectedFiles.length === 0) return;
+
+    setZipState({
+      active: true,
+      status: `Preparing to download ${selectedFiles.length} selected files...`,
+      current: 0,
+      total: selectedFiles.length,
+      percentage: 0,
+    });
+    cancelledRef.current = false;
+
+    const statusSocket = getClientSocket();
+    const onDeviceStatusChange = (data: { deviceId: string; status: string }) => {
+      if (data.deviceId === selectedDevice.id && data.status === "offline") {
+        cancelledRef.current = true;
+        setZipState((prev) => ({ ...prev, status: "Device disconnected — saving what was downloaded..." }));
+      }
+    };
+    statusSocket.on(SOCKET_EVENTS.DEVICE.STATUS_CHANGE, onDeviceStatusChange);
+
+    try {
+      const folderName = currentFolder?.name || "selected_photos";
+      const fakeFolder: FolderItem = {
+        id: "__selection__",
+        name: folderName,
+        fileCount: selectedFiles.length,
+      };
+      await downloadFolderInChunks(fakeFolder, selectedFiles);
+
+      // Clear selection after successful download
+      setSelectedIds(new Set());
+      setSelectMode(false);
+    } catch (err) {
+      console.error("Selected ZIP download failed:", err);
+      alert((err as Error).message || "An error occurred while creating the ZIP archive.");
+    } finally {
+      statusSocket.off(SOCKET_EVENTS.DEVICE.STATUS_CHANGE, onDeviceStatusChange);
+      setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
+    }
   };
 
   // ─── Infinite scroll: load the next folder page when the sentinel
@@ -434,10 +507,17 @@ export default function GalleryPage() {
     const socket = getClientSocket();
     const manager = getFileTransferManager(socket);
     try {
-      const { blob } = await manager.requestFile(selectedDevice.id, file.id);
-      const url = URL.createObjectURL(blob);
-      thumbnailUrlsRef.current.push(url);
-      setViewerUrl(url);
+      if (isHeicFile(file)) {
+        // High-res JPEG preview for HEIC files since standard browsers cannot render image/heic
+        const hiResUrl = await manager.requestThumbnail(selectedDevice.id, file.id, 2048, 2048);
+        thumbnailUrlsRef.current.push(hiResUrl);
+        setViewerUrl(hiResUrl);
+      } else {
+        const { blob } = await manager.requestFile(selectedDevice.id, file.id);
+        const url = URL.createObjectURL(blob);
+        thumbnailUrlsRef.current.push(url);
+        setViewerUrl(url);
+      }
     } catch {
       // Leave viewer showing the thumbnail-quality fallback below.
     }
@@ -460,6 +540,21 @@ export default function GalleryPage() {
       downloadBlob(blob, fileName || photo.name);
     } catch (err) {
       console.error("Download failed:", err);
+    }
+  };
+
+  const handleDownloadJpg = async (photo: PhotoItem) => {
+    if (!selectedDevice) return;
+    const socket = getClientSocket();
+    const manager = getFileTransferManager(socket);
+    try {
+      const hiResUrl = await manager.requestThumbnail(selectedDevice.id, photo.id, 2048, 2048);
+      const res = await fetch(hiResUrl);
+      const blob = await res.blob();
+      const baseName = photo.name.replace(/\.(heic|heif)$/i, "");
+      downloadBlob(blob, `${baseName}.jpg`);
+    } catch (err) {
+      console.error("JPG download failed:", err);
     }
   };
 
@@ -748,6 +843,19 @@ export default function GalleryPage() {
 
           {currentFolder && (
             <div className="flex items-center gap-3">
+              {/* Select mode toggle */}
+              <button
+                onClick={toggleSelectMode}
+                className={`btn-ghost text-xs font-bold flex items-center gap-2 py-1.5 px-3 rounded-lg border transition-all ${
+                  selectMode
+                    ? "border-[var(--color-accent-primary)] bg-[var(--color-accent-primary)]/10 text-[var(--color-accent-primary)]"
+                    : "border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:text-[var(--color-accent-primary)] hover:border-[var(--color-accent-primary)]"
+                }`}
+                title={selectMode ? "Exit select mode" : "Select photos"}
+              >
+                {selectMode ? <X className="w-3.5 h-3.5" /> : <CheckSquare className="w-3.5 h-3.5" />}
+                {selectMode ? "Cancel" : "Select"}
+              </button>
               <button
                 onClick={() => downloadFolderAsZip(currentFolder)}
                 className="btn-ghost text-xs font-bold flex items-center gap-2 py-1.5 px-3 rounded-lg border border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:text-[var(--color-accent-primary)] hover:border-[var(--color-accent-primary)]"
@@ -851,10 +959,63 @@ export default function GalleryPage() {
                 </div>
               ) : (
                 <>
+                  {/* ─── Selection toolbar ─── */}
+                  {selectMode && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      className="mb-4 flex flex-wrap items-center gap-3 p-3 rounded-xl bg-[var(--color-surface-glass)] border border-[var(--color-border-subtle)] backdrop-blur-md"
+                    >
+                      <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
+                        <CheckSquare className="w-4 h-4 text-[var(--color-accent-primary)]" />
+                        <span>{selectedIds.size} selected</span>
+                      </div>
+
+                      <div className="w-px h-5 bg-[var(--color-border-subtle)]" />
+
+                      <button
+                        onClick={selectAll}
+                        className="text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-accent-primary)] flex items-center gap-1.5 transition-colors"
+                      >
+                        <CheckCheck className="w-3.5 h-3.5" />
+                        Select All ({photos.length})
+                      </button>
+
+                      {selectedIds.size > 0 && (
+                        <button
+                          onClick={deselectAll}
+                          className="text-xs font-semibold text-[var(--color-text-secondary)] hover:text-red-400 flex items-center gap-1.5 transition-colors"
+                        >
+                          <Square className="w-3.5 h-3.5" />
+                          Deselect All
+                        </button>
+                      )}
+
+                      <div className="flex-1" />
+
+                      <button
+                        onClick={downloadSelectedAsZip}
+                        disabled={selectedIds.size === 0}
+                        className={`text-xs font-bold flex items-center gap-2 py-1.5 px-4 rounded-lg border transition-all ${
+                          selectedIds.size > 0
+                            ? "border-[var(--color-accent-primary)] bg-[var(--color-accent-primary)]/15 text-[var(--color-accent-primary)] hover:bg-[var(--color-accent-primary)]/25"
+                            : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] cursor-not-allowed opacity-50"
+                        }`}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Download {selectedIds.size > 0 ? `${selectedIds.size} ` : ""}Selected
+                      </button>
+                    </motion.div>
+                  )}
+
                   <PhotoGrid
                     photos={photos}
                     onPhotoClick={openViewer}
                     onDownload={handleDownload}
+                    selectable={selectMode}
+                    selectedIds={selectedIds}
+                    onSelectionChange={setSelectedIds}
                     size={gridSize}
                   />
                   {/* Sentinel — loads the next page automatically once it scrolls
@@ -890,6 +1051,7 @@ export default function GalleryPage() {
               ? photos[viewerIndex]?.thumbnailUrl || ""
               : viewerUrl || photos[viewerIndex]?.thumbnailUrl || ""
           }
+          fallbackUrl={photos[viewerIndex]?.thumbnailUrl || ""}
           isLoadingFull={!viewerUrl}
           imageName={photos[viewerIndex]?.name || ""}
           imageSize={photos[viewerIndex]?.size}
@@ -898,6 +1060,10 @@ export default function GalleryPage() {
           onDownload={() => {
             const photo = photos[viewerIndex];
             if (photo) handleDownload(photo);
+          }}
+          onDownloadJpg={() => {
+            const photo = photos[viewerIndex];
+            if (photo) handleDownloadJpg(photo);
           }}
           onDelete={() => {
             const photo = photos[viewerIndex];

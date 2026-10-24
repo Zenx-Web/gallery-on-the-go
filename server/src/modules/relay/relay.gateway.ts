@@ -393,3 +393,20 @@ export function getDeviceNamespace(): Namespace {
 export function getClientNamespace(): Namespace {
   return clientNamespace;
 }
+
+/**
+ * Send an immediate wake/ping signal to a connected device via its socket.
+ */
+export function wakeDeviceSocket(deviceId: string): boolean {
+  const socketId = getDeviceSocketId(deviceId);
+  if (!socketId || !deviceNamespace) return false;
+
+  const deviceSocket = deviceNamespace.sockets.get(socketId);
+  if (deviceSocket) {
+    deviceSocket.emit(SOCKET_EVENTS.DEVICE.WAKE, {
+      timestamp: Date.now(),
+    });
+    return true;
+  }
+  return false;
+}

@@ -14,7 +14,7 @@ import EmptyState from "@/components/EmptyState";
 import ImageViewer from "@/components/ImageViewer";
 import { useDevices } from "@/contexts/DeviceContext";
 import { getClientSocket } from "@/lib/socket";
-import { getFileTransferManager, downloadBlob } from "@/lib/fileTransfer";
+import { getFileTransferManager, downloadBlob, isHeicFile } from "@/lib/fileTransfer";
 import { runWithConcurrency } from "@/lib/concurrency";
 import {
   Folder,
@@ -450,12 +450,33 @@ export default function FoldersPage() {
     const socket = getClientSocket();
     const manager = getFileTransferManager(socket);
     try {
-      const { blob } = await manager.requestFile(selectedDevice.id, entry.id);
-      const url = URL.createObjectURL(blob);
-      objectUrlsRef.current.push(url);
-      setViewerUrl(url);
+      if (isHeicFile(entry)) {
+        // High-res JPEG preview for HEIC files since standard browsers cannot render image/heic
+        const hiResUrl = await manager.requestThumbnail(selectedDevice.id, entry.id, 2048, 2048);
+        setViewerUrl(hiResUrl);
+      } else {
+        const { blob } = await manager.requestFile(selectedDevice.id, entry.id);
+        const url = URL.createObjectURL(blob);
+        objectUrlsRef.current.push(url);
+        setViewerUrl(url);
+      }
     } catch {
       // Leave the viewer on the thumbnail-quality fallback.
+    }
+  };
+
+  const handleDownloadJpg = async (entry: FolderEntry) => {
+    if (!selectedDevice) return;
+    const socket = getClientSocket();
+    const manager = getFileTransferManager(socket);
+    try {
+      const hiResUrl = await manager.requestThumbnail(selectedDevice.id, entry.id, 2048, 2048);
+      const res = await fetch(hiResUrl);
+      const blob = await res.blob();
+      const baseName = entry.name.replace(/\.(heic|heif)$/i, "");
+      downloadBlob(blob, `${baseName}.jpg`);
+    } catch (err) {
+      console.error("JPG download failed:", err);
     }
   };
 
@@ -781,6 +802,7 @@ export default function FoldersPage() {
                     ? ""
                     : viewerUrl || (viewerEntry ? thumbnails[viewerEntry.id] || "" : "")
                 }
+                fallbackUrl={viewerEntry ? thumbnails[viewerEntry.id] || "" : ""}
                 isLoadingFull={!viewerUrl}
                 imageName={viewerEntry?.name || ""}
                 imageSize={viewerEntry?.size}
@@ -788,6 +810,9 @@ export default function FoldersPage() {
                 onClose={() => setViewerOpen(false)}
                 onDownload={() => {
                   if (viewerEntry) handleDownload(viewerEntry);
+                }}
+                onDownloadJpg={() => {
+                  if (viewerEntry) handleDownloadJpg(viewerEntry);
                 }}
                 onPrev={() => navigateViewer(-1)}
                 onNext={() => navigateViewer(1)}

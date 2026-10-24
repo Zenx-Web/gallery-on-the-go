@@ -3,11 +3,14 @@
 /**
  * PhotoGrid — Responsive masonry-style photo grid with hover overlays.
  * Supports selection, lazy loading, and animated entrance.
+ *
+ * Selection can be controlled by the parent via `selectedIds` +
+ * `onSelectionChange`, or managed internally when only `selectable` is set.
  */
 
 import { motion } from "framer-motion";
 import { Download, Eye, Check } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 export interface PhotoItem {
   id: string;
@@ -25,6 +28,10 @@ interface PhotoGridProps {
   onPhotoClick: (photo: PhotoItem) => void;
   onDownload?: (photo: PhotoItem) => void;
   selectable?: boolean;
+  /** Parent-controlled selection set. When provided, internal state is bypassed. */
+  selectedIds?: Set<string>;
+  /** Called when a photo's selection is toggled (parent-controlled mode). */
+  onSelectionChange?: (selectedIds: Set<string>) => void;
   /** "comfortable" (default) renders fewer, larger tiles than "compact". */
   size?: "compact" | "comfortable";
 }
@@ -40,18 +47,29 @@ export default function PhotoGrid({
   onPhotoClick,
   onDownload,
   selectable = false,
+  selectedIds: externalSelected,
+  onSelectionChange,
   size = "comfortable",
 }: PhotoGridProps) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Fallback internal state for when the parent doesn't control selection.
+  const [internalSelected, setInternalSelected] = useState<Set<string>>(new Set());
 
-  const toggleSelect = (id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
+  const selected = externalSelected ?? internalSelected;
+
+  const toggleSelect = useCallback(
+    (id: string) => {
+      const next = new Set(selected);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      return next;
-    });
-  };
+
+      if (onSelectionChange) {
+        onSelectionChange(next);
+      } else {
+        setInternalSelected(next);
+      }
+    },
+    [selected, onSelectionChange]
+  );
 
   return (
     <div
@@ -97,50 +115,52 @@ export default function PhotoGrid({
               </div>
             )}
 
-            {/* Hover Overlay */}
-            <div className="overlay">
-              <div className="flex items-center justify-between w-full">
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-white truncate">
-                    {photo.name}
-                  </p>
-                  <p className="text-[10px] text-white/60">
-                    {formatSize(photo.size)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1 ml-2">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onPhotoClick(photo);
-                    }}
-                    className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all"
-                  >
-                    <Eye className="w-3.5 h-3.5 text-white" />
-                  </button>
-                  {onDownload && (
+            {/* Hover Overlay — hidden in select mode so the checkbox is the primary affordance */}
+            {!selectable && (
+              <div className="overlay">
+                <div className="flex items-center justify-between w-full">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-white truncate">
+                      {photo.name}
+                    </p>
+                    <p className="text-[10px] text-white/60">
+                      {formatSize(photo.size)}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 ml-2">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        onDownload(photo);
+                        onPhotoClick(photo);
                       }}
                       className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all"
                     >
-                      <Download className="w-3.5 h-3.5 text-white" />
+                      <Eye className="w-3.5 h-3.5 text-white" />
                     </button>
-                  )}
+                    {onDownload && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDownload(photo);
+                        }}
+                        className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all"
+                      >
+                        <Download className="w-3.5 h-3.5 text-white" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
-            {/* Selection Checkbox */}
+            {/* Selection Checkbox — always visible in select mode */}
             {selectable && (
-              <div className="absolute top-2 left-2">
+              <div className="absolute top-2 left-2 z-10">
                 <div
-                  className={`w-6 h-6 rounded-md flex items-center justify-center transition-all ${
+                  className={`w-6 h-6 rounded-md flex items-center justify-center transition-all shadow-md ${
                     isSelected
-                      ? "bg-[var(--color-accent-primary)] border-[var(--color-accent-primary)]"
-                      : "bg-black/30 border border-white/30 backdrop-blur-sm"
+                      ? "bg-[var(--color-accent-primary)] border-2 border-[var(--color-accent-primary)]"
+                      : "bg-black/40 border-2 border-white/40 backdrop-blur-sm hover:border-white/60"
                   }`}
                 >
                   {isSelected && <Check className="w-3.5 h-3.5 text-white" />}
@@ -148,9 +168,18 @@ export default function PhotoGrid({
               </div>
             )}
 
+            {/* File name badge in select mode (bottom overlay) */}
+            {selectable && (
+              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-2 pb-1.5 pt-4">
+                <p className="text-[10px] font-medium text-white/80 truncate">
+                  {photo.name}
+                </p>
+              </div>
+            )}
+
             {/* Video Duration Badge */}
             {photo.mimeType.startsWith("video/") && (
-              <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded bg-black/60 backdrop-blur-sm text-[10px] font-medium text-white">
+              <div className={`absolute ${selectable ? "top-2 left-10" : "top-2 right-2"} px-1.5 py-0.5 rounded bg-black/60 backdrop-blur-sm text-[10px] font-medium text-white`}>
                 VIDEO
               </div>
             )}

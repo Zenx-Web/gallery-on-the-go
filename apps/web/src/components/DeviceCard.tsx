@@ -113,45 +113,47 @@ export default function DeviceCard({
               </span>
             </div>
 
-            {/* Wake button — only shown when offline */}
-            {status === "offline" && (
-              <AnimatePresence mode="wait">
-                <motion.button
-                  key={wakeState}
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.8 }}
-                  transition={{ duration: 0.15 }}
-                  onClick={handleWake}
-                  disabled={wakeState === "sending"}
-                  title="Send wake signal — device will reconnect automatically"
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium transition-colors ${
-                    wakeState === "sent"
-                      ? "bg-green-500/20 text-green-400 border border-green-500/30"
-                      : wakeState === "failed"
-                      ? "bg-red-500/20 text-red-400 border border-red-500/30"
-                      : "bg-[var(--color-accent-primary)]/10 text-[var(--color-accent-primary)] border border-[var(--color-accent-primary)]/30 hover:bg-[var(--color-accent-primary)]/20"
-                  }`}
-                >
-                  {wakeState === "sending" && (
-                    <RefreshCw className="w-3 h-3 animate-spin" />
-                  )}
-                  {wakeState === "sent" && (
-                    <CheckCircle2 className="w-3 h-3" />
-                  )}
-                  {wakeState === "failed" && (
-                    <AlertCircle className="w-3 h-3" />
-                  )}
-                  {wakeState === "idle" && (
-                    <RefreshCw className="w-3 h-3" />
-                  )}
-                  {wakeState === "idle" && "Wake"}
-                  {wakeState === "sending" && "Sending…"}
-                  {wakeState === "sent" && "Signal sent"}
-                  {wakeState === "failed" && "Failed"}
-                </motion.button>
-              </AnimatePresence>
-            )}
+            {/* Wake/Ping button */}
+            <AnimatePresence mode="wait">
+              <motion.button
+                key={wakeState}
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                transition={{ duration: 0.15 }}
+                onClick={handleWake}
+                disabled={wakeState === "sending"}
+                title={
+                  status === "online"
+                    ? "Ping / wake device to ensure active response"
+                    : "Send wake signal — device will reconnect automatically"
+                }
+                className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium transition-colors ${
+                  wakeState === "sent"
+                    ? "bg-green-500/20 text-green-400 border border-green-500/30"
+                    : wakeState === "failed"
+                    ? "bg-red-500/20 text-red-400 border border-red-500/30"
+                    : "bg-[var(--color-accent-primary)]/10 text-[var(--color-accent-primary)] border border-[var(--color-accent-primary)]/30 hover:bg-[var(--color-accent-primary)]/20"
+                }`}
+              >
+                {wakeState === "sending" && (
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                )}
+                {wakeState === "sent" && (
+                  <CheckCircle2 className="w-3 h-3" />
+                )}
+                {wakeState === "failed" && (
+                  <AlertCircle className="w-3 h-3" />
+                )}
+                {wakeState === "idle" && (
+                  <RefreshCw className="w-3 h-3" />
+                )}
+                {wakeState === "idle" && (status === "online" ? "Ping / Wake" : "Wake")}
+                {wakeState === "sending" && "Sending…"}
+                {wakeState === "sent" && (status === "online" ? "Active" : "Signal sent")}
+                {wakeState === "failed" && "Failed"}
+              </motion.button>
+            </AnimatePresence>
           </div>
 
           {lastSeen && status === "offline" && (

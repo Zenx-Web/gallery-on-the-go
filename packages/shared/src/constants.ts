@@ -38,6 +38,8 @@ export const SOCKET_EVENTS = {
     REGISTER: 'device:register',
     HEARTBEAT: 'device:heartbeat',
     STATUS_CHANGE: 'device:status-change',
+    WAKE: 'device:wake',
+    PING: 'device:ping',
   },
 
   // Gallery events

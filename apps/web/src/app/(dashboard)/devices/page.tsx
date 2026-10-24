@@ -36,10 +36,10 @@ export default function DevicesPage() {
       const result = await wakeDevice(selectedDevice.id);
       const message =
         result.status === "already_online"
-          ? "Device is already online."
+          ? "Device is active and confirmed online."
           : result.status === "wake_sent"
-          ? "Wake signal sent — device should reconnect shortly."
-          : "Failed to send wake signal. Check the device FCM token.";
+          ? "Wake signal sent — device should respond shortly."
+          : "Failed to send wake signal. Check device connection.";
       setWakeResult({ ok: result.status !== "fcm_failed", message });
     } catch (err) {
       setWakeResult({ ok: false, message: (err as Error).message });
@@ -68,17 +68,21 @@ export default function DevicesPage() {
           <button
             className="btn-ghost"
             onClick={handleWake}
-            disabled={!selectedDevice || selectedDevice.status === "online" || waking}
+            disabled={!selectedDevice || waking}
             title={
               !selectedDevice
                 ? "Select a device first"
                 : selectedDevice.status === "online"
-                ? "Device is already online"
+                ? "Send wake/ping signal to ensure device is active"
                 : "Send FCM push to wake the device"
             }
           >
             <Bell className={`w-4 h-4 ${waking ? "animate-pulse" : ""}`} />
-            {waking ? "Waking…" : "Wake Device"}
+            {waking
+              ? "Waking…"
+              : selectedDevice?.status === "online"
+              ? "Ping / Wake Device"
+              : "Wake Device"}
           </button>
           <AnimatePresence>
             {wakeResult && (

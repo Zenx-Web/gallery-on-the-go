@@ -25,6 +25,8 @@ import type { EditOptions } from "@/lib/fileTransfer";
 interface ImageViewerProps {
   isOpen: boolean;
   imageUrl: string;
+  /** Optional fallback URL (e.g. thumbnail) if full image cannot be decoded by browser */
+  fallbackUrl?: string;
   /** MIME type of the current item — used to switch between image/video rendering. */
   mimeType?: string;
   /** Playable full blob URL when the current item is a video (poster = imageUrl). */
@@ -36,6 +38,8 @@ interface ImageViewerProps {
   imageDate?: string;
   onClose: () => void;
   onDownload?: () => void;
+  /** Optional handler to download converted JPEG (e.g. for HEIC files) */
+  onDownloadJpg?: () => void;
   onDelete?: () => void;
   onRename?: (newName: string) => void;
   onEdit?: (options: EditOptions) => void;
@@ -54,6 +58,7 @@ function formatSize(bytes: number): string {
 export default function ImageViewer({
   isOpen,
   imageUrl,
+  fallbackUrl,
   mimeType,
   videoUrl,
   isLoadingFull = false,
@@ -62,6 +67,7 @@ export default function ImageViewer({
   imageDate,
   onClose,
   onDownload,
+  onDownloadJpg,
   onDelete,
   onRename,
   onEdit,
@@ -76,8 +82,18 @@ export default function ImageViewer({
   const [rotateDegrees, setRotateDegrees] = useState(0);
   const [brightness, setBrightness] = useState(1);
   const [contrast, setContrast] = useState(1);
+  const [imgError, setImgError] = useState(false);
 
   const isVideo = !!mimeType?.startsWith("video/");
+  const isHeic =
+    mimeType === "image/heic" ||
+    mimeType === "image/heif" ||
+    imageName.toLowerCase().endsWith(".heic") ||
+    imageName.toLowerCase().endsWith(".heif");
+
+  useEffect(() => {
+    setImgError(false);
+  }, [imageUrl]);
 
   const handleDelete = () => {
     if (!onDelete) return;
@@ -190,12 +206,19 @@ export default function ImageViewer({
             className="absolute top-0 left-0 right-0 h-16 flex items-center justify-between px-3 md:px-6 bg-gradient-to-b from-black/80 to-transparent z-10 gap-2"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="min-w-0 flex-1">
-              <p className="text-xs md:text-sm font-medium text-white truncate max-w-[140px] sm:max-w-xs md:max-w-none">
-                {imageName}
-              </p>
-              {imageSize && (
-                <p className="text-[10px] md:text-xs text-white/50">{formatSize(imageSize)}</p>
+            <div className="min-w-0 flex-1 flex items-center gap-2">
+              <div className="min-w-0">
+                <p className="text-xs md:text-sm font-medium text-white truncate max-w-[140px] sm:max-w-xs md:max-w-none">
+                  {imageName}
+                </p>
+                {imageSize && (
+                  <p className="text-[10px] md:text-xs text-white/50">{formatSize(imageSize)}</p>
+                )}
+              </div>
+              {isHeic && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                  HEIC
+                </span>
               )}
             </div>
 
@@ -253,13 +276,25 @@ export default function ImageViewer({
                 </button>
               )}
               {onDownload && (
-                <button
-                  onClick={onDownload}
-                  className="btn-primary py-1.5 px-3 md:py-2 md:px-4 text-xs min-h-[36px]"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Download</span>
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={onDownload}
+                    className="btn-primary py-1.5 px-3 md:py-2 md:px-4 text-xs min-h-[36px]"
+                    title={isHeic ? "Download original HEIC file" : "Download image"}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Download</span>
+                  </button>
+                  {isHeic && onDownloadJpg && (
+                    <button
+                      onClick={onDownloadJpg}
+                      className="px-2.5 py-1.5 md:py-2 md:px-3 text-xs min-h-[36px] rounded-xl bg-white/10 hover:bg-white/20 text-white font-medium border border-white/10 transition-colors"
+                      title="Download converted JPEG version"
+                    >
+                      <span className="text-[11px]">as JPG</span>
+                    </button>
+                  )}
+                </div>
               )}
               <button
                 onClick={onClose}
@@ -313,8 +348,13 @@ export default function ImageViewer({
               <div className="relative">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={imageUrl}
+                  src={imgError && fallbackUrl ? fallbackUrl : (imageUrl || fallbackUrl || "")}
                   alt={imageName}
+                  onError={() => {
+                    if (!imgError && fallbackUrl) {
+                      setImgError(true);
+                    }
+                  }}
                   style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}
                   className="max-w-full max-h-[85vh] object-contain transition-transform duration-200 rounded-lg select-none"
                   draggable={false}
@@ -323,6 +363,11 @@ export default function ImageViewer({
                   <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-sm">
                     <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                     <span className="text-[11px] text-white/80 font-medium">Loading full resolution…</span>
+                  </div>
+                )}
+                {isHeic && (imgError || fallbackUrl) && (
+                  <div className="absolute bottom-3 right-3 px-2 py-1 rounded-md bg-black/60 backdrop-blur-sm text-[10px] text-white/70">
+                    High-res preview (HEIC)
                   </div>
                 )}
               </div>

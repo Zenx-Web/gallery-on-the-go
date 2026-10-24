@@ -22,6 +22,7 @@ import {
   clearFcmToken,
 } from './device.service.js';
 import { wakeDevice } from '../relay/fcm.service.js';
+import { wakeDeviceSocket } from '../relay/relay.gateway.js';
 
 const router = Router();
 
@@ -207,20 +208,13 @@ router.put('/:id/fcm-token', async (req: Request, res: Response): Promise<void> 
 
 /**
  * POST /api/devices/:id/wake
- * Send an FCM wake-up signal to an offline device.
- * The device receives it and reconnects to the socket server automatically.
+ * Send a wake-up / ping signal to a device (via socket and/or FCM).
+ * The device receives it and reconnects/wakes automatically.
  * Requires admin authentication.
  */
 router.post('/:id/wake', authenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const deviceId = String(req.params.id);
-
-    // If the device is already connected via socket, nothing to do.
-    const socketId = getDeviceSocketId(deviceId);
-    if (socketId) {
-      res.json({ success: true, data: { status: 'already_online' } });
-      return;
-    }
 
     const device = await getDeviceById(deviceId);
     if (!device) {
@@ -228,33 +222,49 @@ router.post('/:id/wake', authenticate, async (req: AuthenticatedRequest, res: Re
       return;
     }
 
-    if (!device.fcmToken) {
-      res.status(422).json({
-        success: false,
-        error: 'Device has no FCM token. Open the app on the device first.',
-      });
-      return;
+    const socketId = getDeviceSocketId(deviceId);
+    let socketAwoken = false;
+    if (socketId) {
+      // Send immediate wake/ping signal over the active socket
+      socketAwoken = wakeDeviceSocket(deviceId);
     }
 
-    const result = await wakeDevice(device.fcmToken, deviceId);
+    // Also send FCM if token is present — ensures device wakes from Doze/background even if socket was a zombie
+    if (device.fcmToken) {
+      const result = await wakeDevice(device.fcmToken, deviceId);
+      if (result.unregistered) {
+        await clearFcmToken(deviceId);
+        if (!socketAwoken) {
+          res.json({
+            success: false,
+            data: { status: 'fcm_unregistered' },
+            error: 'The app is no longer installed on that device. Open it on the device once to reconnect.',
+          });
+          return;
+        }
+      }
 
-    if (result.unregistered) {
-      // The token is dead: the app is gone from that device (uninstalled, or the
-      // installation rotated its token). Forget it so the dashboard stops
-      // offering a wake that cannot land, and say so plainly rather than
-      // reporting another silent `wake_sent`.
-      await clearFcmToken(deviceId);
       res.json({
-        success: false,
-        data: { status: 'fcm_unregistered' },
-        error: 'The app is no longer installed on that device. Open it on the device once to reconnect.',
+        success: result.ok || socketAwoken,
+        data: {
+          status: result.ok || socketAwoken ? 'wake_sent' : 'fcm_failed',
+          socketAwoken,
+        },
       });
       return;
     }
 
-    res.json({
-      success: result.ok,
-      data: { status: result.ok ? 'wake_sent' : 'fcm_failed' },
+    if (socketAwoken) {
+      res.json({
+        success: true,
+        data: { status: 'wake_sent', socketAwoken: true },
+      });
+      return;
+    }
+
+    res.status(422).json({
+      success: false,
+      error: 'Device has no FCM token and is not reachable via socket. Open the app on the device first.',
     });
   } catch (err) {
     res.status(500).json({ success: false, error: (err as Error).message });

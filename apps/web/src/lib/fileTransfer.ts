@@ -303,3 +303,16 @@ export function downloadBlob(blob: Blob, fileName: string): void {
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+/** Check if a file is HEIC/HEIF format */
+export function isHeicFile(file: { name?: string; mimeType?: string }): boolean {
+  const mime = file.mimeType?.toLowerCase() || "";
+  const name = file.name?.toLowerCase() || "";
+  return (
+    mime === "image/heic" ||
+    mime === "image/heif" ||
+    name.endsWith(".heic") ||
+    name.endsWith(".heif")
+  );
+}
+
