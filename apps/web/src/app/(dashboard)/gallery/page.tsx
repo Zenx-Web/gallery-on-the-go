@@ -59,6 +59,8 @@ import {
   Square,
   X,
   CheckCheck,
+  Minimize2,
+  Maximize2,
 } from "lucide-react";
 
 function sortByCreatedAt(list: FileItem[], order: SortOrder): FileItem[] {
@@ -110,17 +112,20 @@ export default function GalleryPage() {
   // ─── ZIP Download States ───
   const [zipState, setZipState] = useState<{
     active: boolean;
+    title?: string;
     status: string;
     current: number;
     total: number;
     percentage: number;
   }>({
     active: false,
+    title: "Downloading Folder",
     status: "",
     current: 0,
     total: 0,
     percentage: 0,
   });
+  const [zipMinimized, setZipMinimized] = useState(false);
 
   const cancelledRef = useRef<boolean>(false);
   const thumbnailUrlsRef = useRef<string[]>([]);
@@ -381,6 +386,7 @@ export default function GalleryPage() {
 
     setZipState({
       active: true,
+      title: `Downloading ${selectedFiles.length} Photos`,
       status: `Preparing to download ${selectedFiles.length} selected files...`,
       current: 0,
       total: selectedFiles.length,
@@ -414,7 +420,8 @@ export default function GalleryPage() {
       alert((err as Error).message || "An error occurred while creating the ZIP archive.");
     } finally {
       statusSocket.off(SOCKET_EVENTS.DEVICE.STATUS_CHANGE, onDeviceStatusChange);
-      setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
+      setZipState({ active: false, title: "", status: "", current: 0, total: 0, percentage: 0 });
+      setZipMinimized(false);
     }
   };
 
@@ -692,13 +699,14 @@ export default function GalleryPage() {
 
       const { blob, downloadedCount } = await downloadChunkToZip(chunk, manager, () => {
         settledCount++;
-        setZipState({
+        setZipState((prev) => ({
+          ...prev,
           active: true,
           status: `Downloading files${chunkLabel} — ${settledCount} of ${totalFiles}...`,
           current: settledCount,
           total: totalFiles,
           percentage: Math.round((settledCount / totalFiles) * 100),
-        });
+        }));
       });
 
       if (downloadedCount > 0) {
@@ -726,6 +734,7 @@ export default function GalleryPage() {
 
     setZipState({
       active: true,
+      title: `Downloading ${folder.name}`,
       status: "Requesting folder contents...",
       current: 0,
       total: folder.fileCount || 0,
@@ -769,7 +778,8 @@ export default function GalleryPage() {
       alert((err as Error).message || "An error occurred while creating the ZIP archive.");
     } finally {
       statusSocket.off(SOCKET_EVENTS.DEVICE.STATUS_CHANGE, onDeviceStatusChange);
-      setZipState({ active: false, status: "", current: 0, total: 0, percentage: 0 });
+      setZipState({ active: false, title: "", status: "", current: 0, total: 0, percentage: 0 });
+      setZipMinimized(false);
     }
   };
 
@@ -1084,52 +1094,181 @@ export default function GalleryPage() {
         />
       )}
 
-      {/* ZIP download progress overlay */}
-      {zipState.active && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-bg-primary)]/40 backdrop-blur-md">
-          <div className="w-full max-w-md p-6 bg-gradient-to-br from-[var(--color-surface-glass)] to-[var(--color-surface-glass-hover)] border border-[var(--color-border-subtle)] rounded-2xl shadow-2xl flex flex-col items-center gap-4 text-center">
-            <div className="w-12 h-12 rounded-xl bg-[var(--color-accent-primary)]/10 flex items-center justify-center text-[var(--color-accent-primary)] animate-pulse">
-              <Download className="w-6 h-6 animate-bounce" />
-            </div>
-            
-            <div className="space-y-1">
-              <h3 className="text-lg font-bold text-[var(--color-text-primary)]">
-                Downloading Folder
-              </h3>
-              <p className="text-sm text-[var(--color-text-secondary)] font-medium max-w-xs truncate px-4">
-                {zipState.status}
-              </p>
-            </div>
-
-            {/* Progress Bar Container */}
-            <div className="w-full space-y-1.5 mt-2 px-4">
-              <div className="flex justify-between text-xs font-semibold text-[var(--color-text-tertiary)]">
-                <span>{zipState.current} / {zipState.total} files</span>
-                <span>{zipState.percentage}%</span>
-              </div>
-              <div className="w-full h-2.5 bg-[var(--color-border-subtle)] rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-[var(--color-accent-primary)] to-[var(--color-accent-secondary)] transition-all duration-300 ease-out rounded-full"
-                  style={{ width: `${zipState.percentage}%` }}
-                />
-              </div>
-            </div>
-
-            <button
-              onClick={() => {
-                cancelledRef.current = true;
-                setZipState((prev) => ({
-                  ...prev,
-                  status: "Cancelling... Saving downloaded files...",
-                }));
-              }}
-              className="mt-4 px-5 py-2 text-xs font-bold text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/15 border border-red-500/20 hover:border-red-500/35 rounded-xl transition-all duration-200"
+      {/* ZIP download progress: floating widget in background OR centered modal with minimize option */}
+      <AnimatePresence>
+        {zipState.active && (
+          zipMinimized ? (
+            /* Floating downloading symbol & widget in bottom right corner (Non-blocking: full access to gallery files) */
+            <motion.div
+              key="zip-floating"
+              initial={{ opacity: 0, y: 30, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 30, scale: 0.9 }}
+              transition={{ duration: 0.2 }}
+              className="fixed bottom-6 right-6 z-50 flex items-center gap-3 p-3.5 bg-[var(--color-surface-glass)]/95 backdrop-blur-xl border border-[var(--color-border-subtle)] hover:border-[var(--color-accent-primary)]/60 rounded-2xl shadow-2xl transition-all duration-200 max-w-sm w-full sm:w-84"
             >
-              Cancel Download
-            </button>
-          </div>
-        </div>
-      )}
+              {/* Floating downloading icon symbol with pulsing radar ring */}
+              <button
+                type="button"
+                onClick={() => setZipMinimized(false)}
+                className="relative flex-shrink-0 w-11 h-11 rounded-xl bg-[var(--color-accent-primary)]/15 border border-[var(--color-accent-primary)]/30 flex items-center justify-center text-[var(--color-accent-primary)] hover:scale-105 active:scale-95 transition-transform"
+                title="Click to view full download dialog"
+              >
+                <Download className="w-5 h-5 animate-bounce" />
+                <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-accent-primary)] opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-[var(--color-accent-primary)]"></span>
+                </span>
+              </button>
+
+              {/* Progress info */}
+              <div
+                onClick={() => setZipMinimized(false)}
+                className="flex-1 min-w-0 cursor-pointer"
+                title="Click to expand"
+              >
+                <div className="flex items-center justify-between gap-1 mb-1">
+                  <p className="text-xs font-bold text-[var(--color-text-primary)] truncate">
+                    {zipState.title || "Downloading Files"}
+                  </p>
+                  <span className="text-[11px] font-bold text-[var(--color-accent-primary)]">
+                    {zipState.percentage}%
+                  </span>
+                </div>
+
+                <div className="w-full h-1.5 bg-[var(--color-border-subtle)] rounded-full overflow-hidden mb-1">
+                  <div
+                    className="h-full bg-gradient-to-r from-[var(--color-accent-primary)] to-[var(--color-accent-secondary)] transition-all duration-300 rounded-full"
+                    style={{ width: `${zipState.percentage}%` }}
+                  />
+                </div>
+
+                <p className="text-[10px] text-[var(--color-text-secondary)] truncate">
+                  {zipState.current} / {zipState.total} files • {zipState.status}
+                </p>
+              </div>
+
+              {/* Quick actions */}
+              <div className="flex items-center gap-1 pl-1 border-l border-[var(--color-border-subtle)]">
+                <button
+                  type="button"
+                  onClick={() => setZipMinimized(false)}
+                  className="p-1.5 rounded-lg text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-glass-hover)] transition-colors"
+                  title="Expand dialog"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    cancelledRef.current = true;
+                    setZipState((prev) => ({
+                      ...prev,
+                      status: "Cancelling... Saving downloaded files...",
+                    }));
+                  }}
+                  className="p-1.5 rounded-lg text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors"
+                  title="Cancel Download"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </motion.div>
+          ) : (
+            /* Centered modal with "Keep Browsing (Run in Background)" option */
+            <motion.div
+              key="zip-modal"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              onClick={(e) => {
+                // Clicking the backdrop minimizes to background instead of blocking!
+                if (e.target === e.currentTarget) {
+                  setZipMinimized(true);
+                }
+              }}
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                transition={{ duration: 0.15 }}
+                className="w-full max-w-md p-6 bg-gradient-to-br from-[var(--color-surface-glass)] to-[var(--color-surface-glass-hover)] border border-[var(--color-border-subtle)] rounded-2xl shadow-2xl flex flex-col items-center gap-4 text-center relative"
+              >
+                {/* Top header controls */}
+                <div className="w-full flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-[var(--color-accent-primary)] uppercase tracking-wider bg-[var(--color-accent-primary)]/10 px-2.5 py-0.5 rounded-full border border-[var(--color-accent-primary)]/20">
+                    Downloading in Progress
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setZipMinimized(true)}
+                    className="p-1.5 rounded-lg text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-glass-hover)] transition-colors flex items-center gap-1.5 text-xs"
+                    title="Minimize to floating widget (Keep browsing)"
+                  >
+                    <Minimize2 className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="w-14 h-14 rounded-2xl bg-[var(--color-accent-primary)]/10 border border-[var(--color-accent-primary)]/20 flex items-center justify-center text-[var(--color-accent-primary)]">
+                  <Download className="w-7 h-7 animate-bounce" />
+                </div>
+                
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-[var(--color-text-primary)]">
+                    {zipState.title || "Downloading Folder"}
+                  </h3>
+                  <p className="text-sm text-[var(--color-text-secondary)] font-medium max-w-xs truncate px-4">
+                    {zipState.status}
+                  </p>
+                </div>
+
+                {/* Progress Bar Container */}
+                <div className="w-full space-y-1.5 mt-2 px-2">
+                  <div className="flex justify-between text-xs font-semibold text-[var(--color-text-tertiary)]">
+                    <span>{zipState.current} / {zipState.total} files</span>
+                    <span className="text-[var(--color-accent-primary)] font-bold">{zipState.percentage}%</span>
+                  </div>
+                  <div className="w-full h-2.5 bg-[var(--color-border-subtle)] rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-gradient-to-r from-[var(--color-accent-primary)] to-[var(--color-accent-secondary)] transition-all duration-300 ease-out rounded-full"
+                      style={{ width: `${zipState.percentage}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Bottom action buttons */}
+                <div className="w-full flex flex-col sm:flex-row items-center gap-2.5 mt-3">
+                  <button
+                    type="button"
+                    onClick={() => setZipMinimized(true)}
+                    className="w-full flex-1 py-2.5 px-4 text-xs font-bold text-[var(--color-text-primary)] bg-[var(--color-surface-glass)] hover:bg-[var(--color-surface-glass-hover)] border border-[var(--color-border-subtle)] hover:border-[var(--color-accent-primary)]/40 rounded-xl transition-all duration-200 flex items-center justify-center gap-2"
+                  >
+                    <Minimize2 className="w-3.5 h-3.5 text-[var(--color-accent-primary)]" />
+                    Keep Browsing (Background)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      cancelledRef.current = true;
+                      setZipState((prev) => ({
+                        ...prev,
+                        status: "Cancelling... Saving downloaded files...",
+                      }));
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 text-xs font-bold text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/15 border border-red-500/20 hover:border-red-500/35 rounded-xl transition-all duration-200"
+                  >
+                    Cancel Download
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )
+        )}
+      </AnimatePresence>
     </>
   );
 }
