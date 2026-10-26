@@ -211,6 +211,20 @@ router.put('/:id/fcm-token', async (req: Request, res: Response): Promise<void> 
  * Send a wake-up / ping signal to a device (via socket and/or FCM).
  * The device receives it and reconnects/wakes automatically.
  * Requires admin authentication.
+ *
+ * Wake delivery strategy (server-side only — the mobile app is NOT modified):
+ *
+ * 1. **FCM (primary)** — the only path that reliably works. The Android app's
+ *    FCM handler (`fcm_handler.dart`) listens for `gallery_wake` data messages
+ *    and triggers a socket reconnect via the background service IPC. This works
+ *    whether the app is foregrounded, backgrounded, or terminated.
+ *
+ * 2. **Socket heartbeat ping (secondary)** — if the device has an active socket
+ *    connection, we emit a `device:heartbeat` event (which the app *does* handle
+ *    — it resets its internal heartbeat timer). This doesn't "wake" the device
+ *    per se, but validates that the socket is alive and not a zombie connection.
+ *    NOTE: `device:wake` is intentionally NOT used here because the Android app
+ *    never registered a listener for it, so the event would be silently dropped.
  */
 router.post('/:id/wake', authenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -222,42 +236,59 @@ router.post('/:id/wake', authenticate, async (req: AuthenticatedRequest, res: Re
       return;
     }
 
+    // ── Secondary: socket-level liveness check ──
+    // If the device has a live socket, ping it. This doesn't truly "wake" the
+    // device (the app has no device:wake handler), but confirms the connection
+    // is alive. We still always send FCM below as the real wake mechanism.
     const socketId = getDeviceSocketId(deviceId);
-    let socketAwoken = false;
+    let socketAlive = false;
     if (socketId) {
-      // Send immediate wake/ping signal over the active socket
-      socketAwoken = wakeDeviceSocket(deviceId);
+      socketAlive = wakeDeviceSocket(deviceId);
     }
 
-    // Also send FCM if token is present — ensures device wakes from Doze/background even if socket was a zombie
+    // ── Primary: FCM push (the only path the app actually responds to) ──
     if (device.fcmToken) {
       const result = await wakeDevice(device.fcmToken, deviceId);
+
       if (result.unregistered) {
+        // Token is permanently dead — app was uninstalled or token rotated.
+        // Clear it so we stop trying and the dashboard can show an honest status.
         await clearFcmToken(deviceId);
-        if (!socketAwoken) {
-          res.json({
-            success: false,
-            data: { status: 'fcm_unregistered' },
-            error: 'The app is no longer installed on that device. Open it on the device once to reconnect.',
-          });
-          return;
-        }
+        res.json({
+          success: false,
+          data: { status: 'fcm_unregistered', socketAlive },
+          error: 'The FCM token is no longer valid — the app may have been uninstalled or reinstalled. Open it on the device to re-register.',
+        });
+        return;
       }
 
+      if (result.ok) {
+        res.json({
+          success: true,
+          data: { status: 'wake_sent', socketAlive },
+        });
+        return;
+      }
+
+      // FCM send failed (transient) — report honestly
       res.json({
-        success: result.ok || socketAwoken,
-        data: {
-          status: result.ok || socketAwoken ? 'wake_sent' : 'fcm_failed',
-          socketAwoken,
-        },
+        success: false,
+        data: { status: 'fcm_failed', socketAlive },
+        error: 'FCM delivery failed after retries. The device may come online when it next has connectivity.',
       });
       return;
     }
 
-    if (socketAwoken) {
+    // ── No FCM token at all ──
+    // Without FCM, we genuinely cannot wake the device. Even if the socket
+    // appears connected, the app ignores the device:wake event, so reporting
+    // success here would be dishonest.
+    if (socketAlive) {
+      // Socket is connected so the device is technically reachable — but the
+      // lack of FCM token means wake-from-sleep will never work.
       res.json({
         success: true,
-        data: { status: 'wake_sent', socketAwoken: true },
+        data: { status: 'device_already_online', socketAlive: true },
       });
       return;
     }

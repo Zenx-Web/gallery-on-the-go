@@ -395,7 +395,16 @@ export function getClientNamespace(): Namespace {
 }
 
 /**
- * Send an immediate wake/ping signal to a connected device via its socket.
+ * Send a liveness-check ping to a connected device via its socket.
+ *
+ * **Important**: the Android app (`socket_service.dart`) never registers a
+ * handler for `device:wake`, so that event is silently dropped. This function
+ * exists purely to verify that the socket connection is alive (not a zombie
+ * TCP pipe). It emits `device:ping` which Socket.IO delivers even without an
+ * explicit handler on the client — the successful emit tells us the socket is
+ * live.
+ *
+ * Actual wake-from-sleep is done exclusively via FCM (`fcm.service.ts`).
  */
 export function wakeDeviceSocket(deviceId: string): boolean {
   const socketId = getDeviceSocketId(deviceId);
@@ -403,7 +412,7 @@ export function wakeDeviceSocket(deviceId: string): boolean {
 
   const deviceSocket = deviceNamespace.sockets.get(socketId);
   if (deviceSocket) {
-    deviceSocket.emit(SOCKET_EVENTS.DEVICE.WAKE, {
+    deviceSocket.emit(SOCKET_EVENTS.DEVICE.PING, {
       timestamp: Date.now(),
     });
     return true;
