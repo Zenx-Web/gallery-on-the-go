@@ -15,7 +15,6 @@ import ImageViewer from "@/components/ImageViewer";
 import { useDevices } from "@/contexts/DeviceContext";
 import { getClientSocket } from "@/lib/socket";
 import { getFileTransferManager, downloadBlob, isHeicFile } from "@/lib/fileTransfer";
-import { runWithConcurrency } from "@/lib/concurrency";
 import {
   Folder,
   FolderOpen,
@@ -80,9 +79,8 @@ function pageSizeFor(order: SortOrder): number {
   return order === "name" ? PAGE_SIZE : ALL_ENTRIES_PAGE_SIZE;
 }
 
-// Matches the Gallery page — the device handles each thumbnail request as its
-// own async job, so firing one per file at once floods it and most time out.
-const THUMBNAIL_CONCURRENCY = 5;
+// Concurrency limit for thumbnail requests from the device
+const THUMBNAIL_CONCURRENCY = 6;
 
 const IMAGE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
 const VIDEO_EXTS = ["mp4", "mkv", "avi", "mov", "webm"];
@@ -186,6 +184,68 @@ function buildBreadcrumbs(path: string): { label: string; path: string }[] {
   return crumbs;
 }
 
+// ─── Lazy Thumbnail Component ───────────────────────────────────────────────
+
+function FolderItemPreview({
+  entry,
+  thumbnailUrl,
+  onRequestThumbnail,
+}: {
+  entry: FolderEntry;
+  thumbnailUrl?: string;
+  onRequestThumbnail: (entry: FolderEntry) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const Icon = getFileIcon(entry);
+  const iconColor = getIconColor(entry);
+  const isImage = isImageEntry(entry);
+
+  useEffect(() => {
+    // Only image files can have generated thumbnails for filesystem entries
+    if (!isImage || thumbnailUrl) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          onRequestThumbnail(entry);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "300px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [entry, isImage, thumbnailUrl, onRequestThumbnail]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="shrink-0 w-16 h-16 rounded-lg overflow-hidden flex items-center justify-center bg-white/5"
+    >
+      {thumbnailUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={thumbnailUrl}
+          alt={entry.name}
+          loading="lazy"
+          className="w-full h-full object-cover"
+          onError={() => console.warn(`Thumbnail failed to decode for ${entry.name}`)}
+        />
+      ) : (
+        <span className={iconColor}>
+          {isVideoEntry(entry) ? (
+            <Play className="w-6 h-6" />
+          ) : (
+            <Icon className="w-7 h-7" />
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function FoldersPage() {
@@ -211,17 +271,23 @@ export default function FoldersPage() {
   // effect has nothing to reload and stays out of the way.
   const firstSortEffectRef = useRef(true);
   // Object URLs created for thumbnails / previews, revoked when the folder
-  // changes or the page unmounts so blobs don't accumulate.
   const objectUrlsRef = useRef<string[]>([]);
+  const [displayLimit, setDisplayLimit] = useState(60);
+  const thumbnailQueueRef = useRef<FolderEntry[]>([]);
+  const inFlightCountRef = useRef(0);
+  const requestedIdsRef = useRef<Set<string>>(new Set());
 
   const resetPreviewState = useCallback(() => {
     objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     objectUrlsRef.current = [];
+    requestedIdsRef.current.clear();
+    thumbnailQueueRef.current = [];
     setThumbnails({});
     setOpening(new Set());
     setViewerOpen(false);
     setViewerUrl(null);
     setViewerIndex(0);
+    setDisplayLimit(60);
   }, []);
 
   // ─── Data fetching ───────────────────────────────────────────────────────
@@ -318,56 +384,71 @@ export default function FoldersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDevice, fetchDirectory, resetPreviewState]);
 
-  // Switching between name order and a date order changes how much of the
-  // directory the device must return (a date sort needs all of it), and the
-  // page cursor is only meaningful within one ordering — so reload the folder
-  // the user is actually in, from the top.
+  // Controlled thumbnail request queue — processes at most THUMBNAIL_CONCURRENCY in flight
+  const processThumbnailQueue = useCallback(() => {
+    if (!selectedDevice) return;
+    const socket = getClientSocket();
+    if (!socket?.connected) return;
+    const manager = getFileTransferManager(socket);
+
+    while (
+      inFlightCountRef.current < THUMBNAIL_CONCURRENCY &&
+      thumbnailQueueRef.current.length > 0
+    ) {
+      const nextEntry = thumbnailQueueRef.current.shift();
+      if (!nextEntry || thumbnails[nextEntry.id]) continue;
+
+      inFlightCountRef.current++;
+      manager
+        .requestThumbnail(selectedDevice.id, nextEntry.id)
+        .then((url) => {
+          objectUrlsRef.current.push(url);
+          setThumbnails((prev) => ({ ...prev, [nextEntry.id]: url }));
+        })
+        .catch((err) => {
+          console.warn(`Thumbnail failed for ${nextEntry.name || nextEntry.id}:`, err);
+        })
+        .finally(() => {
+          inFlightCountRef.current--;
+          processThumbnailQueue();
+        });
+    }
+  }, [selectedDevice, thumbnails]);
+
+  const requestThumbnail = useCallback(
+    (entry: FolderEntry) => {
+      if (!selectedDevice || thumbnails[entry.id] || requestedIdsRef.current.has(entry.id)) {
+        return;
+      }
+      requestedIdsRef.current.add(entry.id);
+      thumbnailQueueRef.current.push(entry);
+      processThumbnailQueue();
+    },
+    [selectedDevice, thumbnails, processThumbnailQueue]
+  );
+
+  // When switching between name order and date order:
+  // - If all entries are already loaded (!hasMore), a pure client-side re-sort
+  //   via sortedEntries is instantaneous — no network request or device load!
+  // - If switching to date-order from a paged name-order query, we fetch the
+  //   full directory without clearing existing thumbnails or flashing the UI.
+  const prevSortRef = useRef<SortOrder>(sortOrder);
   useEffect(() => {
     if (!selectedDevice) return;
-    // Nothing is loaded yet (no device has been picked since mount) — the root
-    // effect above will load with whatever order is current once one is.
     if (firstSortEffectRef.current) return;
-    setEntries([]);
-    setPage(1);
-    setHasMore(false);
-    resetPreviewState();
-    fetchDirectory(currentPath, 1, false, pageSizeFor(sortOrder));
+
+    const prev = prevSortRef.current;
+    prevSortRef.current = sortOrder;
+
+    if (!hasMore) return;
+
+    if (prev === "name" && sortOrder !== "name") {
+      fetchDirectory(currentPath, 1, false, ALL_ENTRIES_PAGE_SIZE);
+    } else if (sortOrder === "name" && prev !== "name") {
+      fetchDirectory(currentPath, 1, false, PAGE_SIZE);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortOrder]);
-
-  // Lazily resolve thumbnails for image entries in the current folder.
-  useEffect(() => {
-    if (!selectedDevice || entries.length === 0) return;
-    const socket = getClientSocket();
-    const manager = getFileTransferManager(socket);
-    let cancelled = false;
-
-    // Only images — the device's thumbnail handler falls back to
-    // FlutterImageCompress on the real file, which can't decode video frames
-    // for path-based (`fs_*`) entries.
-    const pending = entries.filter((entry) => isImageEntry(entry) && !thumbnails[entry.id]);
-
-    runWithConcurrency(pending, THUMBNAIL_CONCURRENCY, async (entry) => {
-      if (cancelled) return;
-      try {
-        const url = await manager.requestThumbnail(selectedDevice.id, entry.id);
-        if (cancelled) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        objectUrlsRef.current.push(url);
-        setThumbnails((prev) => ({ ...prev, [entry.id]: url }));
-      } catch (err) {
-        // Leave the entry with its file-type icon; the name is still shown.
-        console.warn(`Thumbnail failed for ${entry.name || entry.id}:`, err);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, selectedDevice]);
 
   // Revoke every object URL on unmount.
   useEffect(() => {
@@ -376,21 +457,36 @@ export default function FoldersPage() {
     };
   }, []);
 
-  // Infinite scroll sentinel. Only reachable for name order — a date sort
-  // loads the whole directory in one request, so it comes back with no more.
+  // Display order. The list and the viewer must both be indexed off this same
+  // array, or the lightbox opens a different file than the one clicked.
+  const sortedEntries = useMemo(
+    () => sortEntries(entries, sortOrder),
+    [entries, sortOrder]
+  );
+
+  const visibleEntries = useMemo(
+    () => sortedEntries.slice(0, displayLimit),
+    [sortedEntries, displayLimit]
+  );
+
+  // Infinite scroll sentinel: smoothly expands display limit for large folders
+  // or fetches the next page from the device if more pages exist.
   useEffect(() => {
-    if (!sentinelRef.current || !hasMore) return;
+    if (!sentinelRef.current) return;
     const obs = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && hasMore && !loadingMore) {
+        if (!entry.isIntersecting) return;
+        if (displayLimit < sortedEntries.length) {
+          setDisplayLimit((prev) => Math.min(prev + 60, sortedEntries.length));
+        } else if (hasMore && !loadingMore && !loading) {
           fetchDirectory(currentPath, page + 1, true, pageSizeFor(sortOrder));
         }
       },
-      { threshold: 0.1 }
+      { threshold: 0.1, rootMargin: "400px" }
     );
     obs.observe(sentinelRef.current);
     return () => obs.disconnect();
-  }, [hasMore, loadingMore, currentPath, page, fetchDirectory, sortOrder]);
+  }, [hasMore, loadingMore, loading, currentPath, page, fetchDirectory, sortOrder, displayLimit, sortedEntries.length]);
 
   // ─── Navigation ──────────────────────────────────────────────────────────
 
@@ -430,13 +526,6 @@ export default function FoldersPage() {
   // ─── Open / preview ───────────────────────────────────────────────────────
   // Media opens in the shared fullscreen viewer; other types open as a blob
   // in a new browser tab, letting the browser/OS render them.
-
-  // Display order. The list and the viewer must both be indexed off this same
-  // array, or the lightbox opens a different file than the one clicked.
-  const sortedEntries = useMemo(
-    () => sortEntries(entries, sortOrder),
-    [entries, sortOrder]
-  );
 
   const previewableEntries = sortedEntries.filter(isPreviewableMedia);
   const viewerEntry = previewableEntries[viewerIndex];
@@ -675,9 +764,7 @@ export default function FoldersPage() {
             {entries.length > 0 && (
               <div className="glass rounded-xl overflow-hidden">
                 <AnimatePresence mode="popLayout">
-                  {sortedEntries.map((entry, idx) => {
-                    const Icon = getFileIcon(entry);
-                    const iconColor = getIconColor(entry);
+                  {visibleEntries.map((entry, idx) => {
                     const isDownloading = downloading.has(entry.id);
                     const isOpening = opening.has(entry.id);
                     const thumbnailUrl = thumbnails[entry.id];
@@ -688,7 +775,7 @@ export default function FoldersPage() {
                         initial={{ opacity: 0, x: -8 }}
                         animate={{ opacity: 1, x: 0 }}
                         exit={{ opacity: 0 }}
-                        transition={{ delay: Math.min(idx * 0.015, 0.3) }}
+                        transition={{ delay: Math.min(idx * 0.01, 0.2) }}
                         className={`
                           flex items-center gap-3 sm:gap-4 px-3 sm:px-4 py-3
                           border-b border-[var(--color-border)] last:border-none
@@ -700,28 +787,11 @@ export default function FoldersPage() {
                         }}
                       >
                         {/* Preview tile */}
-                        <div className="shrink-0 w-16 h-16 rounded-lg overflow-hidden flex items-center justify-center bg-white/5">
-                          {thumbnailUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={thumbnailUrl}
-                              alt={entry.name}
-                              loading="lazy"
-                              className="w-full h-full object-cover"
-                              onError={() =>
-                                console.warn(`Thumbnail failed to decode for ${entry.name}`)
-                              }
-                            />
-                          ) : (
-                            <span className={iconColor}>
-                              {isVideoEntry(entry) ? (
-                                <Play className="w-6 h-6" />
-                              ) : (
-                                <Icon className="w-7 h-7" />
-                              )}
-                            </span>
-                          )}
-                        </div>
+                        <FolderItemPreview
+                          entry={entry}
+                          thumbnailUrl={thumbnailUrl}
+                          onRequestThumbnail={requestThumbnail}
+                        />
 
                         {/* Name & metadata */}
                         <div className="flex-1 min-w-0">
